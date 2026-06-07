@@ -1,6 +1,6 @@
 # SlowTrees
 
-SlowTrees is a Folia-first Minecraft plugin that slowly regrows vanilla trees after players cut logs.
+SlowTrees is a Folia-first Minecraft plugin that slowly regrows vanilla trees and huge mushrooms after players cut them.
 
 ## Target
 
@@ -13,13 +13,15 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 ## Behavior
 
 - Tracks vanilla log breaks.
+- Tracks huge mushroom cap and stem breaks.
 - Finds the bottom of the connected same-type trunk column.
 - Queues one regrowth job per tree base.
 - Waits `initial-delay-ticks`, defaulting to 1 second at 20 TPS.
-- Uses Bukkit/Paper's vanilla tree generator for the configured `TreeType`.
+- Uses Bukkit/Paper's vanilla generator for the configured `TreeType`.
 - Places generated blocks gradually, defaulting to 1 block every 30 seconds.
 - Skips work when the chunk area is not loaded, outside configured player distance, or not owned by the current Folia region.
 - Never intentionally loads chunks.
+- Uses built-in red and brown mushroom defaults if an older config does not have `mushroom-types`.
 
 ## Commands
 

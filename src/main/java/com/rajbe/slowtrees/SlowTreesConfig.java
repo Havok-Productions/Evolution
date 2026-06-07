@@ -27,6 +27,7 @@ final class SlowTreesConfig {
     private final Set<String> disabledWorlds;
     private final Set<Material> replaceableMaterials;
     private final Map<Material, TreeType> treeTypes;
+    private final Map<Material, TreeType> mushroomTypes;
 
     private SlowTreesConfig(
             long initialDelayTicks,
@@ -39,7 +40,8 @@ final class SlowTreesConfig {
             Set<String> enabledWorlds,
             Set<String> disabledWorlds,
             Set<Material> replaceableMaterials,
-            Map<Material, TreeType> treeTypes
+            Map<Material, TreeType> treeTypes,
+            Map<Material, TreeType> mushroomTypes
     ) {
         this.initialDelayTicks = initialDelayTicks;
         this.growthStepTicks = growthStepTicks;
@@ -52,29 +54,18 @@ final class SlowTreesConfig {
         this.disabledWorlds = disabledWorlds;
         this.replaceableMaterials = replaceableMaterials;
         this.treeTypes = treeTypes;
+        this.mushroomTypes = mushroomTypes;
     }
 
     static SlowTreesConfig load(SlowTreesPlugin plugin) {
         FileConfiguration config = plugin.getConfig();
         Logger logger = plugin.getLogger();
 
-        Map<Material, TreeType> treeTypes = new EnumMap<>(Material.class);
-        ConfigurationSection section = config.getConfigurationSection("tree-types");
-        if (section != null) {
-            for (String key : section.getKeys(false)) {
-                Material material = Material.matchMaterial(key);
-                if (material == null) {
-                    logger.warning("Ignoring unknown tree log material in config: " + key);
-                    continue;
-                }
-
-                String treeTypeName = section.getString(key, "").toUpperCase(Locale.ROOT);
-                try {
-                    treeTypes.put(material, TreeType.valueOf(treeTypeName));
-                } catch (IllegalArgumentException ex) {
-                    logger.warning("Ignoring unknown Bukkit TreeType in config: " + treeTypeName);
-                }
-            }
+        Map<Material, TreeType> treeTypes = loadTreeTypeMap(config, logger, "tree-types");
+        Map<Material, TreeType> mushroomTypes = loadTreeTypeMap(config, logger, "mushroom-types");
+        if (!config.isSet("mushroom-types")) {
+            mushroomTypes.put(Material.RED_MUSHROOM_BLOCK, TreeType.RED_MUSHROOM);
+            mushroomTypes.put(Material.BROWN_MUSHROOM_BLOCK, TreeType.BROWN_MUSHROOM);
         }
 
         Set<Material> replaceableMaterials = new HashSet<>();
@@ -98,12 +89,17 @@ final class SlowTreesConfig {
                 normalizeWorldNames(config.getStringList("enabled-worlds")),
                 normalizeWorldNames(config.getStringList("disabled-worlds")),
                 Collections.unmodifiableSet(replaceableMaterials),
-                Collections.unmodifiableMap(new HashMap<>(treeTypes))
+                Collections.unmodifiableMap(new HashMap<>(treeTypes)),
+                Collections.unmodifiableMap(new HashMap<>(mushroomTypes))
         );
     }
 
     Optional<TreeType> treeTypeFor(Material material) {
         return Optional.ofNullable(treeTypes.get(material));
+    }
+
+    Optional<TreeType> mushroomTypeFor(Material material) {
+        return Optional.ofNullable(mushroomTypes.get(material));
     }
 
     boolean isReplaceable(Material material) {
@@ -152,5 +148,30 @@ final class SlowTreesConfig {
             normalized.add(name.toLowerCase(Locale.ROOT));
         }
         return Collections.unmodifiableSet(normalized);
+    }
+
+    private static Map<Material, TreeType> loadTreeTypeMap(FileConfiguration config, Logger logger, String path) {
+        Map<Material, TreeType> treeTypes = new EnumMap<>(Material.class);
+        ConfigurationSection section = config.getConfigurationSection(path);
+        if (section == null) {
+            return treeTypes;
+        }
+
+        for (String key : section.getKeys(false)) {
+            Material material = Material.matchMaterial(key);
+            if (material == null) {
+                logger.warning("Ignoring unknown material in config section " + path + ": " + key);
+                continue;
+            }
+
+            String treeTypeName = section.getString(key, "").toUpperCase(Locale.ROOT);
+            try {
+                treeTypes.put(material, TreeType.valueOf(treeTypeName));
+            } catch (IllegalArgumentException ex) {
+                logger.warning("Ignoring unknown Bukkit TreeType in config section " + path + ": " + treeTypeName);
+            }
+        }
+
+        return treeTypes;
     }
 }

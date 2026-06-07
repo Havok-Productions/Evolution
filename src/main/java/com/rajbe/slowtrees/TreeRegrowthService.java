@@ -49,12 +49,18 @@ final class TreeRegrowthService implements Listener {
     public void onBlockBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
         SlowTreesConfig currentConfig = config;
-        Optional<TreeType> treeType = currentConfig.treeTypeFor(block.getType());
-        if (treeType.isEmpty() || !currentConfig.isWorldAllowed(block.getWorld())) {
+        if (!currentConfig.isWorldAllowed(block.getWorld())) {
             return;
         }
 
-        Block baseBlock = findBaseLog(block);
+        Optional<TreeType> treeType = currentConfig.treeTypeFor(block.getType());
+        if (treeType.isEmpty()) {
+            Optional<PendingTree> pendingMushroom = createPendingMushroom(block, currentConfig);
+            pendingMushroom.ifPresent(pendingTree -> queueRegrowth(pendingTree, currentConfig));
+            return;
+        }
+
+        Block baseBlock = findBaseOfSameType(block);
         PendingTree pendingTree = new PendingTree(
                 baseBlock.getWorld().getUID(),
                 baseBlock.getX(),
@@ -65,6 +71,10 @@ final class TreeRegrowthService implements Listener {
                 0
         );
 
+        queueRegrowth(pendingTree, currentConfig);
+    }
+
+    private void queueRegrowth(PendingTree pendingTree, SlowTreesConfig currentConfig) {
         PendingTree previous = pendingTrees.putIfAbsent(pendingTree.key(), pendingTree);
         if (previous == null) {
             saveQueuedTrees();
@@ -302,12 +312,99 @@ final class TreeRegrowthService implements Listener {
         return currentType == plannedType || currentConfig.isReplaceable(currentType);
     }
 
-    private Block findBaseLog(Block start) {
-        Material logType = start.getType();
+    private Optional<PendingTree> createPendingMushroom(Block block, SlowTreesConfig currentConfig) {
+        Optional<TreeType> mushroomType = resolveMushroomType(block, currentConfig);
+        if (mushroomType.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Optional<Block> baseBlock = findMushroomBase(block);
+        if (baseBlock.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Block base = baseBlock.get();
+        return Optional.of(new PendingTree(
+                base.getWorld().getUID(),
+                base.getX(),
+                base.getY(),
+                base.getZ(),
+                mushroomType.get(),
+                new Random().nextLong(),
+                0
+        ));
+    }
+
+    private Optional<TreeType> resolveMushroomType(Block block, SlowTreesConfig currentConfig) {
+        Optional<TreeType> directType = currentConfig.mushroomTypeFor(block.getType());
+        if (directType.isPresent()) {
+            return directType;
+        }
+
+        if (block.getType() != Material.MUSHROOM_STEM) {
+            return Optional.empty();
+        }
+
+        TreeType bestType = null;
+        int bestDistance = Integer.MAX_VALUE;
+        for (int y = -1; y <= 8; y++) {
+            for (int x = -3; x <= 3; x++) {
+                for (int z = -3; z <= 3; z++) {
+                    Block candidate = block.getRelative(x, y, z);
+                    Optional<TreeType> candidateType = currentConfig.mushroomTypeFor(candidate.getType());
+                    if (candidateType.isEmpty()) {
+                        continue;
+                    }
+
+                    int distance = Math.abs(x) + Math.abs(y) + Math.abs(z);
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        bestType = candidateType.get();
+                    }
+                }
+            }
+        }
+
+        return Optional.ofNullable(bestType);
+    }
+
+    private Optional<Block> findMushroomBase(Block block) {
+        if (block.getType() == Material.MUSHROOM_STEM) {
+            return Optional.of(findBaseOfSameType(block));
+        }
+
+        if (block.getType() != Material.RED_MUSHROOM_BLOCK && block.getType() != Material.BROWN_MUSHROOM_BLOCK) {
+            return Optional.empty();
+        }
+
+        Block bestStem = null;
+        int bestDistance = Integer.MAX_VALUE;
+        for (int y = -8; y <= 1; y++) {
+            for (int x = -3; x <= 3; x++) {
+                for (int z = -3; z <= 3; z++) {
+                    Block candidate = block.getRelative(x, y, z);
+                    if (candidate.getType() != Material.MUSHROOM_STEM) {
+                        continue;
+                    }
+
+                    int distance = Math.abs(x) + Math.abs(y) + Math.abs(z);
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        bestStem = candidate;
+                    }
+                }
+            }
+        }
+
+        return bestStem == null ? Optional.empty() : Optional.of(findBaseOfSameType(bestStem));
+    }
+
+    private Block findBaseOfSameType(Block start) {
+        Material material = start.getType();
         Block cursor = start;
         while (cursor.getY() > cursor.getWorld().getMinHeight()) {
             Block below = cursor.getRelative(0, -1, 0);
-            if (below.getType() != logType) {
+            if (below.getType() != material) {
                 break;
             }
             cursor = below;

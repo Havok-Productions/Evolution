@@ -50,3 +50,9 @@ tree-types:
   MANGROVE_LOG: MANGROVE
   CHERRY_LOG: CHERRY
   PALE_OAK_LOG: PALE_OAK
+
+# Huge mushroom cap material to Bukkit TreeType mapping. Stems are detected
+# automatically by nearby red or brown cap blocks.
+mushroom-types:
+  RED_MUSHROOM_BLOCK: RED_MUSHROOM
+  BROWN_MUSHROOM_BLOCK: BROWN_MUSHROOM
