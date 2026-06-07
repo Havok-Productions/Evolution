@@ -5,9 +5,9 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
-import java.util.Queue;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -32,6 +32,8 @@ import org.slowtrees.core.SlowTreesPlugin;
 public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private final SlowTreesPlugin plugin;
     private final ConcurrentMap<String, PendingRegrowth> pendingRegrowth = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ActiveRegrowth> activeRegrowth = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, String> activeBlockKeys = new ConcurrentHashMap<>();
     private volatile PlantRegrowthConfig config;
 
     public PlantRegrowthFeature(SlowTreesPlugin plugin) {
@@ -56,7 +58,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     @Override
     public String status() {
-        return "Plant regrowth has " + pendingRegrowth.size() + " queued structure(s).";
+        return "Plant regrowth has " + pendingRegrowth.size() + " queued structure(s), " + activeRegrowth.size() + " actively growing.";
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -64,6 +66,17 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         Block block = event.getBlock();
         PlantRegrowthConfig currentConfig = config;
         if (!currentConfig.isWorldAllowed(block.getWorld())) {
+            return;
+        }
+
+        String brokenBlockKey = PendingRegrowth.keyFor(block);
+        PendingRegrowth anchoredPending = pendingRegrowth.get(brokenBlockKey);
+        if (anchoredPending != null && block.getType() == anchoredPending.anchorMaterial()) {
+            cancelRegrowth(anchoredPending);
+            return;
+        }
+
+        if (interruptActiveRegrowth(block, currentConfig)) {
             return;
         }
 
@@ -99,11 +112,77 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         if (previous == null) {
             saveQueuedRegrowth();
             scheduleAttempt(pending, currentConfig.initialDelayTicks());
+            return;
+        }
+
+        ActiveRegrowth active = activeRegrowth.get(previous.key());
+        if (active != null) {
+            active.resetCooldown(currentConfig.growthStepTicks());
         }
     }
 
     private void cancelAnchoredRegrowth(Block baseBlock) {
-        if (pendingRegrowth.remove(PendingRegrowth.keyFor(baseBlock)) != null) {
+        PendingRegrowth pending = pendingRegrowth.get(PendingRegrowth.keyFor(baseBlock));
+        if (pending != null) {
+            cancelRegrowth(pending);
+        }
+    }
+
+    private void cancelRegrowth(PendingRegrowth pending) {
+        pendingRegrowth.remove(pending.key());
+        unregisterActiveRegrowth(pending.key());
+        saveQueuedRegrowth();
+    }
+
+    private boolean interruptActiveRegrowth(Block block, PlantRegrowthConfig currentConfig) {
+        String blockKey = PendingRegrowth.keyFor(block);
+        String regrowthKey = activeBlockKeys.get(blockKey);
+        if (regrowthKey == null) {
+            return false;
+        }
+
+        ActiveRegrowth active = activeRegrowth.get(regrowthKey);
+        if (active == null) {
+            activeBlockKeys.remove(blockKey);
+            return false;
+        }
+
+        active.unmarkPlaced(blockKey);
+        activeBlockKeys.remove(blockKey);
+        active.requeueFirst(block.getState());
+        active.resetCooldown(currentConfig.growthStepTicks());
+        return true;
+    }
+
+    private void unregisterActiveRegrowth(String regrowthKey) {
+        ActiveRegrowth active = activeRegrowth.remove(regrowthKey);
+        if (active != null) {
+            for (String blockKey : active.placedBlockKeysSnapshot()) {
+                activeBlockKeys.remove(blockKey, regrowthKey);
+            }
+        }
+    }
+
+    private void markPlaced(ActiveRegrowth active, BlockState state) {
+        String blockKey = PendingRegrowth.keyFor(state.getBlock());
+        active.markPlaced(blockKey);
+        activeBlockKeys.put(blockKey, active.pending().key());
+    }
+
+    private void finishRegrowth(PendingRegrowth pending) {
+        pendingRegrowth.remove(pending.key());
+        unregisterActiveRegrowth(pending.key());
+        saveQueuedRegrowth();
+    }
+
+    private void removeRegrowth(PendingRegrowth pending) {
+        pendingRegrowth.remove(pending.key());
+        unregisterActiveRegrowth(pending.key());
+        saveQueuedRegrowth();
+    }
+
+    private void saveIfPresent(PendingRegrowth pending) {
+        if (pendingRegrowth.containsKey(pending.key())) {
             saveQueuedRegrowth();
         }
     }
@@ -161,8 +240,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private void scheduleAttempt(PendingRegrowth pending, long delayTicks) {
         World world = pending.world();
         if (world == null) {
-            pendingRegrowth.remove(pending.key());
-            saveQueuedRegrowth();
+            removeRegrowth(pending);
             return;
         }
 
@@ -178,8 +256,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         PlantRegrowthConfig currentConfig = config;
         World world = pending.world();
         if (world == null || !currentConfig.isWorldAllowed(world)) {
-            pendingRegrowth.remove(pending.key());
-            saveQueuedRegrowth();
+            removeRegrowth(pending);
             return;
         }
 
@@ -190,21 +267,22 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         }
 
         if (!hasAnchorBlock(location, pending)) {
-            pendingRegrowth.remove(pending.key());
-            saveQueuedRegrowth();
+            removeRegrowth(pending);
             return;
         }
 
-        Queue<BlockState> plannedBlocks = planStructure(location, pending.treeType(), pending.seed(), currentConfig);
+        Deque<BlockState> plannedBlocks = planStructure(location, pending.treeType(), pending.seed(), currentConfig);
         if (plannedBlocks.isEmpty()) {
             retryLater(pending);
             return;
         }
 
-        placeNextBatch(pending, plannedBlocks);
+        ActiveRegrowth active = new ActiveRegrowth(pending, plannedBlocks);
+        activeRegrowth.put(pending.key(), active);
+        placeNextBatch(active);
     }
 
-    private Queue<BlockState> planStructure(Location location, TreeType treeType, long seed, PlantRegrowthConfig currentConfig) {
+    private Deque<BlockState> planStructure(Location location, TreeType treeType, long seed, PlantRegrowthConfig currentConfig) {
         List<BlockState> generatedStates = new ArrayList<>();
         try {
             location.getWorld().generateTree(location, new Random(seed), treeType, state -> {
@@ -221,51 +299,61 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         return new ArrayDeque<>(generatedStates);
     }
 
-    private void placeNextBatch(PendingRegrowth pending, Queue<BlockState> plannedBlocks) {
+    private void placeNextBatch(ActiveRegrowth active) {
+        PendingRegrowth pending = active.pending();
         World world = pending.world();
         if (world == null) {
-            pendingRegrowth.remove(pending.key());
-            saveQueuedRegrowth();
+            removeRegrowth(pending);
             return;
         }
 
         PlantRegrowthConfig currentConfig = config;
         Location location = pending.location(world);
+        long remainingCooldownTicks = active.remainingCooldownTicks();
+        if (remainingCooldownTicks > 0L) {
+            Bukkit.getRegionScheduler().runDelayed(
+                    plugin,
+                    location,
+                    task -> placeNextBatch(active),
+                    remainingCooldownTicks
+            );
+            return;
+        }
+
         if (!canWorkAt(location, currentConfig)) {
             Bukkit.getRegionScheduler().runDelayed(
                     plugin,
                     location,
-                    task -> placeNextBatch(pending, plannedBlocks),
+                    task -> placeNextBatch(active),
                     currentConfig.retryDelayTicks()
             );
             return;
         }
 
         if (!hasAnchorBlock(location, pending)) {
-            pendingRegrowth.remove(pending.key());
-            saveQueuedRegrowth();
+            removeRegrowth(pending);
             return;
         }
 
         int placed = 0;
-        while (placed < currentConfig.blocksPerGrowthStep() && !plannedBlocks.isEmpty()) {
-            BlockState state = plannedBlocks.poll();
+        while (placed < currentConfig.blocksPerGrowthStep() && !active.isFinished()) {
+            BlockState state = active.pollNextBlock();
             if (state != null && canPlace(state, currentConfig)) {
                 state.update(true, false);
+                markPlaced(active, state);
                 placed++;
             }
         }
 
-        if (plannedBlocks.isEmpty()) {
-            pendingRegrowth.remove(pending.key());
-            saveQueuedRegrowth();
+        if (active.isFinished()) {
+            finishRegrowth(pending);
             return;
         }
 
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 location,
-                task -> placeNextBatch(pending, plannedBlocks),
+                task -> placeNextBatch(active),
                 currentConfig.growthStepTicks()
         );
     }
@@ -274,12 +362,11 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         PlantRegrowthConfig currentConfig = config;
         pending.incrementAttempts();
         if (currentConfig.maxRegrowthAttempts() > 0 && pending.attempts() >= currentConfig.maxRegrowthAttempts()) {
-            pendingRegrowth.remove(pending.key());
-            saveQueuedRegrowth();
+            removeRegrowth(pending);
             return;
         }
 
-        saveQueuedRegrowth();
+        saveIfPresent(pending);
         scheduleAttempt(pending, currentConfig.retryDelayTicks());
     }
 
