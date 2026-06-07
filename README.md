@@ -19,6 +19,7 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 - Waits `initial-delay-ticks`, defaulting to 1 second at 20 TPS.
 - Uses Bukkit/Paper's vanilla generator for the configured `TreeType`.
 - Places generated blocks gradually, defaulting to 1 block every 30 seconds.
+- Treats the lowest connected log or mushroom stem as the living anchor; breaking that stump cancels regrowth.
 - Skips work when the chunk area is not loaded, outside configured player distance, or not owned by the current Folia region.
 - Never intentionally loads chunks.
 - Uses built-in red and brown mushroom defaults if an older config does not have `mushroom-types`.

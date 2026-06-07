@@ -3,8 +3,10 @@ package com.rajbe.slowtrees;
 import java.util.UUID;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.TreeType;
+import org.bukkit.block.Block;
 import org.bukkit.configuration.ConfigurationSection;
 
 final class PendingTree {
@@ -13,15 +15,17 @@ final class PendingTree {
     private final int y;
     private final int z;
     private final TreeType treeType;
+    private final Material anchorMaterial;
     private final long seed;
     private int attempts;
 
-    PendingTree(UUID worldId, int x, int y, int z, TreeType treeType, long seed, int attempts) {
+    PendingTree(UUID worldId, int x, int y, int z, TreeType treeType, Material anchorMaterial, long seed, int attempts) {
         this.worldId = worldId;
         this.x = x;
         this.y = y;
         this.z = z;
         this.treeType = treeType;
+        this.anchorMaterial = anchorMaterial;
         this.seed = seed;
         this.attempts = attempts;
     }
@@ -29,12 +33,15 @@ final class PendingTree {
     static PendingTree from(ConfigurationSection section) {
         UUID worldId = UUID.fromString(section.getString("world-id", ""));
         TreeType treeType = TreeType.valueOf(section.getString("tree-type", "TREE"));
+        String anchorMaterialName = section.getString("anchor-material", "");
+        Material anchorMaterial = anchorMaterialName.isBlank() ? null : Material.matchMaterial(anchorMaterialName);
         return new PendingTree(
                 worldId,
                 section.getInt("x"),
                 section.getInt("y"),
                 section.getInt("z"),
                 treeType,
+                anchorMaterial,
                 section.getLong("seed"),
                 section.getInt("attempts")
         );
@@ -46,6 +53,7 @@ final class PendingTree {
         section.set("y", y);
         section.set("z", z);
         section.set("tree-type", treeType.name());
+        section.set("anchor-material", anchorMaterial == null ? null : anchorMaterial.name());
         section.set("seed", seed);
         section.set("attempts", attempts);
     }
@@ -62,8 +70,16 @@ final class PendingTree {
         return worldId + ":" + x + ":" + y + ":" + z;
     }
 
+    static String keyFor(Block block) {
+        return block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
+    }
+
     TreeType treeType() {
         return treeType;
+    }
+
+    Material anchorMaterial() {
+        return anchorMaterial;
     }
 
     long seed() {

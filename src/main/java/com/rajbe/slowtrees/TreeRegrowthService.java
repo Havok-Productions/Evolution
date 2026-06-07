@@ -61,12 +61,18 @@ final class TreeRegrowthService implements Listener {
         }
 
         Block baseBlock = findBaseOfSameType(block);
+        if (isSameBlock(block, baseBlock)) {
+            cancelAnchoredRegrowth(baseBlock);
+            return;
+        }
+
         PendingTree pendingTree = new PendingTree(
                 baseBlock.getWorld().getUID(),
                 baseBlock.getX(),
                 baseBlock.getY(),
                 baseBlock.getZ(),
                 treeType.get(),
+                baseBlock.getType(),
                 new Random().nextLong(),
                 0
         );
@@ -79,6 +85,12 @@ final class TreeRegrowthService implements Listener {
         if (previous == null) {
             saveQueuedTrees();
             scheduleAttempt(pendingTree, currentConfig.initialDelayTicks());
+        }
+    }
+
+    private void cancelAnchoredRegrowth(Block baseBlock) {
+        if (pendingTrees.remove(PendingTree.keyFor(baseBlock)) != null) {
+            saveQueuedTrees();
         }
     }
 
@@ -163,6 +175,12 @@ final class TreeRegrowthService implements Listener {
             return;
         }
 
+        if (!hasAnchorBlock(location, pendingTree)) {
+            pendingTrees.remove(pendingTree.key());
+            saveQueuedTrees();
+            return;
+        }
+
         Queue<BlockState> plannedBlocks = planTree(location, pendingTree.treeType(), pendingTree.seed(), currentConfig);
         if (plannedBlocks.isEmpty()) {
             retryLater(pendingTree);
@@ -206,6 +224,12 @@ final class TreeRegrowthService implements Listener {
                     task -> placeNextBatch(pendingTree, plannedBlocks),
                     currentConfig.retryDelayTicks()
             );
+            return;
+        }
+
+        if (!hasAnchorBlock(location, pendingTree)) {
+            pendingTrees.remove(pendingTree.key());
+            saveQueuedTrees();
             return;
         }
 
@@ -324,12 +348,18 @@ final class TreeRegrowthService implements Listener {
         }
 
         Block base = baseBlock.get();
+        if (isSameBlock(block, base)) {
+            cancelAnchoredRegrowth(base);
+            return Optional.empty();
+        }
+
         return Optional.of(new PendingTree(
                 base.getWorld().getUID(),
                 base.getX(),
                 base.getY(),
                 base.getZ(),
                 mushroomType.get(),
+                base.getType(),
                 new Random().nextLong(),
                 0
         ));
@@ -397,6 +427,18 @@ final class TreeRegrowthService implements Listener {
         }
 
         return bestStem == null ? Optional.empty() : Optional.of(findBaseOfSameType(bestStem));
+    }
+
+    private boolean hasAnchorBlock(Location location, PendingTree pendingTree) {
+        Material anchorMaterial = pendingTree.anchorMaterial();
+        return anchorMaterial == null || location.getBlock().getType() == anchorMaterial;
+    }
+
+    private boolean isSameBlock(Block first, Block second) {
+        return first.getWorld().equals(second.getWorld())
+                && first.getX() == second.getX()
+                && first.getY() == second.getY()
+                && first.getZ() == second.getZ();
     }
 
     private Block findBaseOfSameType(Block start) {
