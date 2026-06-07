@@ -15,7 +15,7 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 - Tracks vanilla log breaks.
 - Finds the bottom of the connected same-type trunk column.
 - Queues one regrowth job per tree base.
-- Waits `initial-delay-ticks`, defaulting to 30 minutes at 20 TPS.
+- Waits `initial-delay-ticks`, defaulting to 1 second at 20 TPS.
 - Uses Bukkit/Paper's vanilla tree generator for the configured `TreeType`.
 - Places generated blocks gradually in batches.
 - Skips work when the chunk area is not loaded, outside configured player distance, or not owned by the current Folia region.

@@ -1,5 +1,5 @@
-# Default: 30 minutes at 20 TPS.
-initial-delay-ticks: 36000
+# Default: 1 second at 20 TPS.
+initial-delay-ticks: 20
 
 # Once regrowth begins, this controls how quickly blocks appear.
 growth-step-ticks: 20
