@@ -10,7 +10,7 @@ blocks-per-growth-step: 1
 # A growth-speed-multiplier of 0.15 means 15% normal speed.
 # With the defaults above, enabled mode grows about 1 block every 200 seconds.
 world-health-mode:
-  enabled: false
+  enabled: true
   growth-speed-multiplier: 0.15
 
 # If a tree cannot regrow because the area is unloaded, too far from players,
