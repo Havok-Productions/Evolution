@@ -2,8 +2,9 @@
 initial-delay-ticks: 20
 
 # Once regrowth begins, this controls how quickly blocks appear.
-growth-step-ticks: 20
-blocks-per-growth-step: 4
+# Default: 1 block every 30 seconds at 20 TPS.
+growth-step-ticks: 600
+blocks-per-growth-step: 1
 
 # If a tree cannot regrow because the area is unloaded, too far from players,
 # or blocked by another region boundary, it retries later without loading chunks.

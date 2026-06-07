@@ -17,7 +17,7 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 - Queues one regrowth job per tree base.
 - Waits `initial-delay-ticks`, defaulting to 1 second at 20 TPS.
 - Uses Bukkit/Paper's vanilla tree generator for the configured `TreeType`.
-- Places generated blocks gradually in batches.
+- Places generated blocks gradually, defaulting to 1 block every 30 seconds.
 - Skips work when the chunk area is not loaded, outside configured player distance, or not owned by the current Folia region.
 - Never intentionally loads chunks.
 
