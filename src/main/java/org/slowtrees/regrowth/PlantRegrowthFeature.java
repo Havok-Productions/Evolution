@@ -1,4 +1,4 @@
-package com.rajbe.slowtrees;
+package org.slowtrees.regrowth;
 
 import java.io.File;
 import java.io.IOException;
@@ -26,37 +26,51 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.slowtrees.core.PluginFeature;
+import org.slowtrees.core.SlowTreesPlugin;
 
-final class TreeRegrowthService implements Listener {
+public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private final SlowTreesPlugin plugin;
-    private final ConcurrentMap<String, PendingTree> pendingTrees = new ConcurrentHashMap<>();
-    private volatile SlowTreesConfig config;
+    private final ConcurrentMap<String, PendingRegrowth> pendingRegrowth = new ConcurrentHashMap<>();
+    private volatile PlantRegrowthConfig config;
 
-    TreeRegrowthService(SlowTreesPlugin plugin, SlowTreesConfig config) {
+    public PlantRegrowthFeature(SlowTreesPlugin plugin) {
         this.plugin = plugin;
-        this.config = config;
+        this.config = PlantRegrowthConfig.load(plugin);
     }
 
-    void updateConfig(SlowTreesConfig config) {
-        this.config = config;
+    @Override
+    public void onEnable() {
+        loadQueuedRegrowth();
     }
 
-    int pendingCount() {
-        return pendingTrees.size();
+    @Override
+    public void onDisable() {
+        saveQueuedRegrowth();
+    }
+
+    @Override
+    public void reload() {
+        this.config = PlantRegrowthConfig.load(plugin);
+    }
+
+    @Override
+    public String status() {
+        return "Plant regrowth has " + pendingRegrowth.size() + " queued structure(s).";
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
-        SlowTreesConfig currentConfig = config;
+        PlantRegrowthConfig currentConfig = config;
         if (!currentConfig.isWorldAllowed(block.getWorld())) {
             return;
         }
 
         Optional<TreeType> treeType = currentConfig.treeTypeFor(block.getType());
         if (treeType.isEmpty()) {
-            Optional<PendingTree> pendingMushroom = createPendingMushroom(block, currentConfig);
-            pendingMushroom.ifPresent(pendingTree -> queueRegrowth(pendingTree, currentConfig));
+            Optional<PendingRegrowth> pendingMushroom = createPendingMushroom(block, currentConfig);
+            pendingMushroom.ifPresent(pending -> queueRegrowth(pending, currentConfig));
             return;
         }
 
@@ -66,7 +80,7 @@ final class TreeRegrowthService implements Listener {
             return;
         }
 
-        PendingTree pendingTree = new PendingTree(
+        PendingRegrowth pending = new PendingRegrowth(
                 baseBlock.getWorld().getUID(),
                 baseBlock.getX(),
                 baseBlock.getY(),
@@ -77,24 +91,24 @@ final class TreeRegrowthService implements Listener {
                 0
         );
 
-        queueRegrowth(pendingTree, currentConfig);
+        queueRegrowth(pending, currentConfig);
     }
 
-    private void queueRegrowth(PendingTree pendingTree, SlowTreesConfig currentConfig) {
-        PendingTree previous = pendingTrees.putIfAbsent(pendingTree.key(), pendingTree);
+    private void queueRegrowth(PendingRegrowth pending, PlantRegrowthConfig currentConfig) {
+        PendingRegrowth previous = pendingRegrowth.putIfAbsent(pending.key(), pending);
         if (previous == null) {
-            saveQueuedTrees();
-            scheduleAttempt(pendingTree, currentConfig.initialDelayTicks());
+            saveQueuedRegrowth();
+            scheduleAttempt(pending, currentConfig.initialDelayTicks());
         }
     }
 
     private void cancelAnchoredRegrowth(Block baseBlock) {
-        if (pendingTrees.remove(PendingTree.keyFor(baseBlock)) != null) {
-            saveQueuedTrees();
+        if (pendingRegrowth.remove(PendingRegrowth.keyFor(baseBlock)) != null) {
+            saveQueuedRegrowth();
         }
     }
 
-    void loadQueuedTrees() {
+    private void loadQueuedRegrowth() {
         File file = queueFile();
         if (!file.exists()) {
             return;
@@ -113,84 +127,84 @@ final class TreeRegrowthService implements Listener {
             }
 
             try {
-                PendingTree pendingTree = PendingTree.from(section);
-                pendingTrees.put(pendingTree.key(), pendingTree);
-                scheduleAttempt(pendingTree, config.retryDelayTicks());
+                PendingRegrowth pending = PendingRegrowth.from(section);
+                pendingRegrowth.put(pending.key(), pending);
+                scheduleAttempt(pending, config.retryDelayTicks());
             } catch (RuntimeException ex) {
-                plugin.getLogger().warning("Skipping invalid queued tree entry '" + key + "': " + ex.getMessage());
+                plugin.getLogger().warning("Skipping invalid queued plant regrowth entry '" + key + "': " + ex.getMessage());
             }
         }
     }
 
-    void saveQueuedTrees() {
+    private void saveQueuedRegrowth() {
         YamlConfiguration yaml = new YamlConfiguration();
         ConfigurationSection trees = yaml.createSection("trees");
         int index = 0;
-        for (PendingTree pendingTree : pendingTrees.values()) {
-            pendingTree.writeTo(trees.createSection(Integer.toString(index++)));
+        for (PendingRegrowth pending : pendingRegrowth.values()) {
+            pending.writeTo(trees.createSection(Integer.toString(index++)));
         }
 
         File file = queueFile();
         File parent = file.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
-            plugin.getLogger().warning("Could not create plugin data folder for queued tree storage.");
+            plugin.getLogger().warning("Could not create plugin data folder for plant regrowth storage.");
             return;
         }
 
         try {
             yaml.save(file);
         } catch (IOException ex) {
-            plugin.getLogger().log(Level.WARNING, "Could not save queued trees.", ex);
+            plugin.getLogger().log(Level.WARNING, "Could not save queued plant regrowth.", ex);
         }
     }
 
-    private void scheduleAttempt(PendingTree pendingTree, long delayTicks) {
-        World world = pendingTree.world();
+    private void scheduleAttempt(PendingRegrowth pending, long delayTicks) {
+        World world = pending.world();
         if (world == null) {
-            pendingTrees.remove(pendingTree.key());
-            saveQueuedTrees();
+            pendingRegrowth.remove(pending.key());
+            saveQueuedRegrowth();
             return;
         }
 
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
-                pendingTree.location(world),
-                task -> attemptRegrowth(pendingTree),
+                pending.location(world),
+                task -> attemptRegrowth(pending),
                 Math.max(1L, delayTicks)
         );
     }
 
-    private void attemptRegrowth(PendingTree pendingTree) {
-        SlowTreesConfig currentConfig = config;
-        World world = pendingTree.world();
+    private void attemptRegrowth(PendingRegrowth pending) {
+        PlantRegrowthConfig currentConfig = config;
+        World world = pending.world();
         if (world == null || !currentConfig.isWorldAllowed(world)) {
-            pendingTrees.remove(pendingTree.key());
-            saveQueuedTrees();
+            pendingRegrowth.remove(pending.key());
+            saveQueuedRegrowth();
             return;
         }
 
-        Location location = pendingTree.location(world);
+        Location location = pending.location(world);
         if (!canWorkAt(location, currentConfig)) {
-            retryLater(pendingTree);
+            retryLater(pending);
             return;
         }
 
-        if (!hasAnchorBlock(location, pendingTree)) {
-            pendingTrees.remove(pendingTree.key());
-            saveQueuedTrees();
+        if (!hasAnchorBlock(location, pending)) {
+            pendingRegrowth.remove(pending.key());
+            saveQueuedRegrowth();
             return;
         }
 
-        Queue<BlockState> plannedBlocks = planTree(location, pendingTree.treeType(), pendingTree.seed(), currentConfig);
+        Queue<BlockState> plannedBlocks = planStructure(location, pending.treeType(), pending.seed(), currentConfig);
         if (plannedBlocks.isEmpty()) {
-            retryLater(pendingTree);
+            retryLater(pending);
             return;
         }
 
-        placeNextBatch(pendingTree, plannedBlocks);
+        placeNextBatch(pending, plannedBlocks);
     }
 
-    private Queue<BlockState> planTree(Location location, TreeType treeType, long seed, SlowTreesConfig currentConfig) {
+    private Queue<BlockState> planStructure(Location location, TreeType treeType, long seed, PlantRegrowthConfig currentConfig) {
         List<BlockState> generatedStates = new ArrayList<>();
         try {
             location.getWorld().generateTree(location, new Random(seed), treeType, state -> {
@@ -198,38 +212,38 @@ final class TreeRegrowthService implements Listener {
                 return false;
             });
         } catch (RuntimeException ex) {
-            plugin.getLogger().fine("Tree generation failed at " + format(location) + ": " + ex.getMessage());
+            plugin.getLogger().fine("Structure generation failed at " + format(location) + ": " + ex.getMessage());
             return new ArrayDeque<>();
         }
 
         generatedStates.removeIf(state -> !canPlace(state, currentConfig));
-        generatedStates.sort(Comparator.comparingInt(TreeRegrowthService::growthPriority));
+        generatedStates.sort(Comparator.comparingInt(PlantRegrowthFeature::growthPriority));
         return new ArrayDeque<>(generatedStates);
     }
 
-    private void placeNextBatch(PendingTree pendingTree, Queue<BlockState> plannedBlocks) {
-        World world = pendingTree.world();
+    private void placeNextBatch(PendingRegrowth pending, Queue<BlockState> plannedBlocks) {
+        World world = pending.world();
         if (world == null) {
-            pendingTrees.remove(pendingTree.key());
-            saveQueuedTrees();
+            pendingRegrowth.remove(pending.key());
+            saveQueuedRegrowth();
             return;
         }
 
-        SlowTreesConfig currentConfig = config;
-        Location location = pendingTree.location(world);
+        PlantRegrowthConfig currentConfig = config;
+        Location location = pending.location(world);
         if (!canWorkAt(location, currentConfig)) {
             Bukkit.getRegionScheduler().runDelayed(
                     plugin,
                     location,
-                    task -> placeNextBatch(pendingTree, plannedBlocks),
+                    task -> placeNextBatch(pending, plannedBlocks),
                     currentConfig.retryDelayTicks()
             );
             return;
         }
 
-        if (!hasAnchorBlock(location, pendingTree)) {
-            pendingTrees.remove(pendingTree.key());
-            saveQueuedTrees();
+        if (!hasAnchorBlock(location, pending)) {
+            pendingRegrowth.remove(pending.key());
+            saveQueuedRegrowth();
             return;
         }
 
@@ -243,33 +257,33 @@ final class TreeRegrowthService implements Listener {
         }
 
         if (plannedBlocks.isEmpty()) {
-            pendingTrees.remove(pendingTree.key());
-            saveQueuedTrees();
+            pendingRegrowth.remove(pending.key());
+            saveQueuedRegrowth();
             return;
         }
 
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 location,
-                task -> placeNextBatch(pendingTree, plannedBlocks),
+                task -> placeNextBatch(pending, plannedBlocks),
                 currentConfig.growthStepTicks()
         );
     }
 
-    private void retryLater(PendingTree pendingTree) {
-        SlowTreesConfig currentConfig = config;
-        pendingTree.incrementAttempts();
-        if (currentConfig.maxRegrowthAttempts() > 0 && pendingTree.attempts() >= currentConfig.maxRegrowthAttempts()) {
-            pendingTrees.remove(pendingTree.key());
-            saveQueuedTrees();
+    private void retryLater(PendingRegrowth pending) {
+        PlantRegrowthConfig currentConfig = config;
+        pending.incrementAttempts();
+        if (currentConfig.maxRegrowthAttempts() > 0 && pending.attempts() >= currentConfig.maxRegrowthAttempts()) {
+            pendingRegrowth.remove(pending.key());
+            saveQueuedRegrowth();
             return;
         }
 
-        saveQueuedTrees();
-        scheduleAttempt(pendingTree, currentConfig.retryDelayTicks());
+        saveQueuedRegrowth();
+        scheduleAttempt(pending, currentConfig.retryDelayTicks());
     }
 
-    private boolean canWorkAt(Location location, SlowTreesConfig currentConfig) {
+    private boolean canWorkAt(Location location, PlantRegrowthConfig currentConfig) {
         World world = location.getWorld();
         if (world == null) {
             return false;
@@ -329,14 +343,14 @@ final class TreeRegrowthService implements Listener {
         return false;
     }
 
-    private boolean canPlace(BlockState state, SlowTreesConfig currentConfig) {
+    private boolean canPlace(BlockState state, PlantRegrowthConfig currentConfig) {
         Block block = state.getBlock();
         Material currentType = block.getType();
         Material plannedType = state.getType();
         return currentType == plannedType || currentConfig.isReplaceable(currentType);
     }
 
-    private Optional<PendingTree> createPendingMushroom(Block block, SlowTreesConfig currentConfig) {
+    private Optional<PendingRegrowth> createPendingMushroom(Block block, PlantRegrowthConfig currentConfig) {
         Optional<TreeType> mushroomType = resolveMushroomType(block, currentConfig);
         if (mushroomType.isEmpty()) {
             return Optional.empty();
@@ -353,7 +367,7 @@ final class TreeRegrowthService implements Listener {
             return Optional.empty();
         }
 
-        return Optional.of(new PendingTree(
+        return Optional.of(new PendingRegrowth(
                 base.getWorld().getUID(),
                 base.getX(),
                 base.getY(),
@@ -365,7 +379,7 @@ final class TreeRegrowthService implements Listener {
         ));
     }
 
-    private Optional<TreeType> resolveMushroomType(Block block, SlowTreesConfig currentConfig) {
+    private Optional<TreeType> resolveMushroomType(Block block, PlantRegrowthConfig currentConfig) {
         Optional<TreeType> directType = currentConfig.mushroomTypeFor(block.getType());
         if (directType.isPresent()) {
             return directType;
@@ -429,8 +443,8 @@ final class TreeRegrowthService implements Listener {
         return bestStem == null ? Optional.empty() : Optional.of(findBaseOfSameType(bestStem));
     }
 
-    private boolean hasAnchorBlock(Location location, PendingTree pendingTree) {
-        Material anchorMaterial = pendingTree.anchorMaterial();
+    private boolean hasAnchorBlock(Location location, PendingRegrowth pending) {
+        Material anchorMaterial = pending.anchorMaterial();
         return anchorMaterial == null || location.getBlock().getType() == anchorMaterial;
     }
 
@@ -455,7 +469,7 @@ final class TreeRegrowthService implements Listener {
     }
 
     private File queueFile() {
-        return new File(plugin.getDataFolder(), "queued-trees.yml");
+        return new File(plugin.getDataFolder(), "queued-regrowth.yml");
     }
 
     private static int growthPriority(BlockState state) {

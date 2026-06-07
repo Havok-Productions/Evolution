@@ -1,4 +1,4 @@
-package com.rajbe.slowtrees;
+package org.slowtrees.regrowth;
 
 import java.util.Collections;
 import java.util.EnumMap;
@@ -14,8 +14,9 @@ import org.bukkit.TreeType;
 import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.slowtrees.core.SlowTreesPlugin;
 
-final class SlowTreesConfig {
+final class PlantRegrowthConfig {
     private final long initialDelayTicks;
     private final long growthStepTicks;
     private final int blocksPerGrowthStep;
@@ -31,7 +32,7 @@ final class SlowTreesConfig {
     private final Map<Material, TreeType> treeTypes;
     private final Map<Material, TreeType> mushroomTypes;
 
-    private SlowTreesConfig(
+    private PlantRegrowthConfig(
             long initialDelayTicks,
             long growthStepTicks,
             int blocksPerGrowthStep,
@@ -63,7 +64,7 @@ final class SlowTreesConfig {
         this.mushroomTypes = mushroomTypes;
     }
 
-    static SlowTreesConfig load(SlowTreesPlugin plugin) {
+    static PlantRegrowthConfig load(SlowTreesPlugin plugin) {
         FileConfiguration config = plugin.getConfig();
         Logger logger = plugin.getLogger();
 
@@ -84,11 +85,11 @@ final class SlowTreesConfig {
             replaceableMaterials.add(material);
         }
 
-        return new SlowTreesConfig(
-                Math.max(1L, config.getLong("initial-delay-ticks", 36000L)),
-                Math.max(1L, config.getLong("growth-step-ticks", 20L)),
-                Math.max(1, config.getInt("blocks-per-growth-step", 4)),
-                config.getBoolean("world-health-mode.enabled", false),
+        return new PlantRegrowthConfig(
+                Math.max(1L, config.getLong("initial-delay-ticks", 20L)),
+                Math.max(1L, config.getLong("growth-step-ticks", 600L)),
+                Math.max(1, config.getInt("blocks-per-growth-step", 1)),
+                config.getBoolean("world-health-mode.enabled", true),
                 sanitizeGrowthSpeedMultiplier(config.getDouble("world-health-mode.growth-speed-multiplier", 0.15D), logger),
                 Math.max(1L, config.getLong("retry-delay-ticks", 6000L)),
                 Math.max(0, config.getInt("max-regrowth-attempts", 0)),

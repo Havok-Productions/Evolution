@@ -1,6 +1,6 @@
 # SlowTrees
 
-SlowTrees is a Folia-first Minecraft plugin that slowly regrows vanilla trees and huge mushrooms after players cut them.
+SlowTrees is a Folia-first Minecraft plugin that slowly regrows vanilla trees and huge mushrooms after players cut them, and lets active Nether portals slowly leak Nether-like terrain into the Overworld.
 
 ## Target
 
@@ -10,7 +10,7 @@ SlowTrees is a Folia-first Minecraft plugin that slowly regrows vanilla trees an
 
 The plugin depends on Folia's region scheduler and declares `folia-supported: true`.
 
-## Behavior
+## Plant Regrowth
 
 - Tracks vanilla log breaks.
 - Tracks huge mushroom cap and stem breaks.
@@ -24,6 +24,16 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 - Skips work when the chunk area is not loaded, outside configured player distance, or not owned by the current Folia region.
 - Never intentionally loads chunks.
 - Uses built-in red and brown mushroom defaults if an older config does not have `mushroom-types`.
+
+## Nether Corruption
+
+- Tracks newly created and player-used Nether portal clusters in Overworld worlds.
+- Slowly changes nearby natural terrain while the portal still exists.
+- Stops spreading when the portal is gone, while existing corruption remains.
+- Turns water into lava as corruption reaches it.
+- Leaves blocks alone when there is no clear Nether equivalent.
+- Keeps Nether mimic rules in code instead of exposing replacement maps.
+- Skips work when target chunks are unloaded, outside configured player distance, or outside the current Folia region.
 
 ## Commands
 

@@ -1,15 +1,15 @@
-package com.rajbe.slowtrees;
+package org.slowtrees.regrowth;
 
 import java.util.UUID;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.World;
 import org.bukkit.TreeType;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.configuration.ConfigurationSection;
 
-final class PendingTree {
+final class PendingRegrowth {
     private final UUID worldId;
     private final int x;
     private final int y;
@@ -19,7 +19,7 @@ final class PendingTree {
     private final long seed;
     private int attempts;
 
-    PendingTree(UUID worldId, int x, int y, int z, TreeType treeType, Material anchorMaterial, long seed, int attempts) {
+    PendingRegrowth(UUID worldId, int x, int y, int z, TreeType treeType, Material anchorMaterial, long seed, int attempts) {
         this.worldId = worldId;
         this.x = x;
         this.y = y;
@@ -30,12 +30,12 @@ final class PendingTree {
         this.attempts = attempts;
     }
 
-    static PendingTree from(ConfigurationSection section) {
+    static PendingRegrowth from(ConfigurationSection section) {
         UUID worldId = UUID.fromString(section.getString("world-id", ""));
         TreeType treeType = TreeType.valueOf(section.getString("tree-type", "TREE"));
         String anchorMaterialName = section.getString("anchor-material", "");
         Material anchorMaterial = anchorMaterialName.isBlank() ? null : Material.matchMaterial(anchorMaterialName);
-        return new PendingTree(
+        return new PendingRegrowth(
                 worldId,
                 section.getInt("x"),
                 section.getInt("y"),

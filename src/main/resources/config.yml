@@ -63,3 +63,16 @@ tree-types:
 mushroom-types:
   RED_MUSHROOM_BLOCK: RED_MUSHROOM
   BROWN_MUSHROOM_BLOCK: BROWN_MUSHROOM
+
+# Nether corruption treats active Nether portals in the Overworld as sources
+# of slow terrain change. It does not use a configurable replacement map:
+# only internal vanilla-inspired natural block mimics are applied, and blocks
+# without a clear Nether equivalent are left alone.
+nether-corruption:
+  enabled: true
+  spread-step-ticks: 1200
+  blocks-per-step: 1
+  max-radius: 24
+  vertical-radius: 8
+  attempts-per-step: 24
+  required-player-distance-chunks: 8
