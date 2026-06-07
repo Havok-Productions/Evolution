@@ -6,6 +6,13 @@ initial-delay-ticks: 20
 growth-step-ticks: 600
 blocks-per-growth-step: 1
 
+# World health mode slows natural regrowth without changing the normal baseline.
+# A growth-speed-multiplier of 0.15 means 15% normal speed.
+# With the defaults above, enabled mode grows about 1 block every 200 seconds.
+world-health-mode:
+  enabled: false
+  growth-speed-multiplier: 0.15
+
 # If a tree cannot regrow because the area is unloaded, too far from players,
 # or blocked by another region boundary, it retries later without loading chunks.
 retry-delay-ticks: 6000

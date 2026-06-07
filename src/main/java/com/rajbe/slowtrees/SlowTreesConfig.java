@@ -19,6 +19,8 @@ final class SlowTreesConfig {
     private final long initialDelayTicks;
     private final long growthStepTicks;
     private final int blocksPerGrowthStep;
+    private final boolean worldHealthModeEnabled;
+    private final double worldHealthGrowthSpeedMultiplier;
     private final long retryDelayTicks;
     private final int maxRegrowthAttempts;
     private final int requiredPlayerDistanceChunks;
@@ -33,6 +35,8 @@ final class SlowTreesConfig {
             long initialDelayTicks,
             long growthStepTicks,
             int blocksPerGrowthStep,
+            boolean worldHealthModeEnabled,
+            double worldHealthGrowthSpeedMultiplier,
             long retryDelayTicks,
             int maxRegrowthAttempts,
             int requiredPlayerDistanceChunks,
@@ -46,6 +50,8 @@ final class SlowTreesConfig {
         this.initialDelayTicks = initialDelayTicks;
         this.growthStepTicks = growthStepTicks;
         this.blocksPerGrowthStep = blocksPerGrowthStep;
+        this.worldHealthModeEnabled = worldHealthModeEnabled;
+        this.worldHealthGrowthSpeedMultiplier = worldHealthGrowthSpeedMultiplier;
         this.retryDelayTicks = retryDelayTicks;
         this.maxRegrowthAttempts = maxRegrowthAttempts;
         this.requiredPlayerDistanceChunks = requiredPlayerDistanceChunks;
@@ -82,6 +88,8 @@ final class SlowTreesConfig {
                 Math.max(1L, config.getLong("initial-delay-ticks", 36000L)),
                 Math.max(1L, config.getLong("growth-step-ticks", 20L)),
                 Math.max(1, config.getInt("blocks-per-growth-step", 4)),
+                config.getBoolean("world-health-mode.enabled", false),
+                sanitizeGrowthSpeedMultiplier(config.getDouble("world-health-mode.growth-speed-multiplier", 0.15D), logger),
                 Math.max(1L, config.getLong("retry-delay-ticks", 6000L)),
                 Math.max(0, config.getInt("max-regrowth-attempts", 0)),
                 Math.max(0, config.getInt("required-player-distance-chunks", 8)),
@@ -119,7 +127,11 @@ final class SlowTreesConfig {
     }
 
     long growthStepTicks() {
-        return growthStepTicks;
+        if (!worldHealthModeEnabled) {
+            return growthStepTicks;
+        }
+
+        return Math.max(1L, Math.round(growthStepTicks / worldHealthGrowthSpeedMultiplier));
     }
 
     int blocksPerGrowthStep() {
@@ -148,6 +160,15 @@ final class SlowTreesConfig {
             normalized.add(name.toLowerCase(Locale.ROOT));
         }
         return Collections.unmodifiableSet(normalized);
+    }
+
+    private static double sanitizeGrowthSpeedMultiplier(double value, Logger logger) {
+        if (Double.isFinite(value) && value > 0.0D) {
+            return value;
+        }
+
+        logger.warning("world-health-mode.growth-speed-multiplier must be greater than 0. Using 1.0.");
+        return 1.0D;
     }
 
     private static Map<Material, TreeType> loadTreeTypeMap(FileConfiguration config, Logger logger, String path) {
