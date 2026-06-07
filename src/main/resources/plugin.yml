@@ -1,0 +1,16 @@
+name: SlowTrees
+version: ${project.version}
+main: com.rajbe.slowtrees.SlowTreesPlugin
+api-version: '26.1.2'
+folia-supported: true
+author: rajbe
+description: Folia-safe vanilla tree regrowth.
+commands:
+  slowtrees:
+    description: Manage SlowTrees.
+    usage: /slowtrees <reload|pending>
+    permission: slowtrees.admin
+permissions:
+  slowtrees.admin:
+    description: Allows SlowTrees administration commands.
+    default: op

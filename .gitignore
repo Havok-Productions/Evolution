@@ -1,0 +1,10 @@
+target/
+work/
+outputs/
+*.iml
+.idea/
+.vscode/
+
+# Runtime plugin data
+plugins/
+server/

@@ -1,0 +1,51 @@
+# Default: 30 minutes at 20 TPS.
+initial-delay-ticks: 36000
+
+# Once regrowth begins, this controls how quickly blocks appear.
+growth-step-ticks: 20
+blocks-per-growth-step: 4
+
+# If a tree cannot regrow because the area is unloaded, too far from players,
+# or blocked by another region boundary, it retries later without loading chunks.
+retry-delay-ticks: 6000
+
+# 0 means retry forever. Positive values remove the queued tree after that many attempts.
+max-regrowth-attempts: 0
+
+# Require an online player within this many chunks of the tree base.
+# Set to 0 to disable this distance check.
+required-player-distance-chunks: 8
+
+# Tree generation can touch neighboring chunks. Keep this at 1 unless you notice
+# Folia ownership warnings with large trees.
+owned-chunk-radius: 1
+
+# Empty enabled-worlds means all worlds except disabled-worlds are allowed.
+enabled-worlds: []
+disabled-worlds: []
+
+# Materials that slow regrowth may replace. Solid player blocks are intentionally
+# not listed, so queued trees wait instead of eating builds.
+replaceable-materials:
+  - AIR
+  - CAVE_AIR
+  - VOID_AIR
+  - SHORT_GRASS
+  - TALL_GRASS
+  - FERN
+  - LARGE_FERN
+  - VINE
+  - SNOW
+
+# Log material to Bukkit TreeType mapping. Missing materials or TreeTypes are
+# ignored at runtime, which keeps the config friendlier across versions.
+tree-types:
+  OAK_LOG: TREE
+  BIRCH_LOG: BIRCH
+  SPRUCE_LOG: REDWOOD
+  JUNGLE_LOG: SMALL_JUNGLE
+  ACACIA_LOG: ACACIA
+  DARK_OAK_LOG: DARK_OAK
+  MANGROVE_LOG: MANGROVE
+  CHERRY_LOG: CHERRY
+  PALE_OAK_LOG: PALE_OAK
