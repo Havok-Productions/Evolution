@@ -6,6 +6,16 @@ import org.bukkit.Material;
 import org.bukkit.block.Block;
 
 final class NetherTerrainMimic {
+    boolean canMimic(Material material) {
+        return material == Material.WATER
+                || isSoil(material)
+                || isStone(material)
+                || material == Material.SAND
+                || material == Material.RED_SAND
+                || material == Material.GRAVEL
+                || material == Material.CLAY;
+    }
+
     Optional<Material> mimic(Block block, Random random) {
         Material type = block.getType();
         if (type == Material.WATER) {

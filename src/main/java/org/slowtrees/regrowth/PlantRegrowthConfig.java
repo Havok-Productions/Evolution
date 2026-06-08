@@ -24,6 +24,11 @@ final class PlantRegrowthConfig {
     private final double worldHealthGrowthSpeedMultiplier;
     private final long retryDelayTicks;
     private final int maxRegrowthAttempts;
+    private final boolean plantDecayEnabled;
+    private final long plantDecayDelayTicks;
+    private final long plantDecayStepTicks;
+    private final int plantDecayBlocksPerStep;
+    private final int plantDecayMaxBlocks;
     private final int requiredPlayerDistanceChunks;
     private final int ownedChunkRadius;
     private final Set<String> enabledWorlds;
@@ -40,6 +45,11 @@ final class PlantRegrowthConfig {
             double worldHealthGrowthSpeedMultiplier,
             long retryDelayTicks,
             int maxRegrowthAttempts,
+            boolean plantDecayEnabled,
+            long plantDecayDelayTicks,
+            long plantDecayStepTicks,
+            int plantDecayBlocksPerStep,
+            int plantDecayMaxBlocks,
             int requiredPlayerDistanceChunks,
             int ownedChunkRadius,
             Set<String> enabledWorlds,
@@ -55,6 +65,11 @@ final class PlantRegrowthConfig {
         this.worldHealthGrowthSpeedMultiplier = worldHealthGrowthSpeedMultiplier;
         this.retryDelayTicks = retryDelayTicks;
         this.maxRegrowthAttempts = maxRegrowthAttempts;
+        this.plantDecayEnabled = plantDecayEnabled;
+        this.plantDecayDelayTicks = plantDecayDelayTicks;
+        this.plantDecayStepTicks = plantDecayStepTicks;
+        this.plantDecayBlocksPerStep = plantDecayBlocksPerStep;
+        this.plantDecayMaxBlocks = plantDecayMaxBlocks;
         this.requiredPlayerDistanceChunks = requiredPlayerDistanceChunks;
         this.ownedChunkRadius = ownedChunkRadius;
         this.enabledWorlds = enabledWorlds;
@@ -93,6 +108,11 @@ final class PlantRegrowthConfig {
                 sanitizeGrowthSpeedMultiplier(config.getDouble("world-health-mode.growth-speed-multiplier", 0.15D), logger),
                 Math.max(1L, config.getLong("retry-delay-ticks", 6000L)),
                 Math.max(0, config.getInt("max-regrowth-attempts", 0)),
+                config.getBoolean("plant-decay.enabled", true),
+                Math.max(1L, config.getLong("plant-decay.delay-ticks", 6000L)),
+                Math.max(1L, config.getLong("plant-decay.step-ticks", 20L)),
+                Math.max(1, config.getInt("plant-decay.blocks-per-step", 1)),
+                Math.max(1, config.getInt("plant-decay.max-blocks", 128)),
                 Math.max(0, config.getInt("required-player-distance-chunks", 8)),
                 Math.max(0, config.getInt("owned-chunk-radius", 1)),
                 normalizeWorldNames(config.getStringList("enabled-worlds")),
@@ -145,6 +165,26 @@ final class PlantRegrowthConfig {
 
     int maxRegrowthAttempts() {
         return maxRegrowthAttempts;
+    }
+
+    boolean plantDecayEnabled() {
+        return plantDecayEnabled;
+    }
+
+    long plantDecayDelayTicks() {
+        return plantDecayDelayTicks;
+    }
+
+    long plantDecayStepTicks() {
+        return plantDecayStepTicks;
+    }
+
+    int plantDecayBlocksPerStep() {
+        return plantDecayBlocksPerStep;
+    }
+
+    int plantDecayMaxBlocks() {
+        return plantDecayMaxBlocks;
     }
 
     int requiredPlayerDistanceChunks() {

@@ -86,6 +86,10 @@ final class PortalSource {
         return worldId + ":" + minX + ":" + minY + ":" + minZ + ":" + maxX + ":" + maxY + ":" + maxZ;
     }
 
+    String shortDescription() {
+        return "world " + worldId + " near " + centerX() + "," + centerY() + "," + centerZ();
+    }
+
     int minChunkX() {
         return minX >> 4;
     }

@@ -6,9 +6,12 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
@@ -34,6 +37,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private final ConcurrentMap<String, PendingRegrowth> pendingRegrowth = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ActiveRegrowth> activeRegrowth = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> activeBlockKeys = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, PlantDecayPlan> activeDecay = new ConcurrentHashMap<>();
     private volatile PlantRegrowthConfig config;
 
     public PlantRegrowthFeature(SlowTreesPlugin plugin) {
@@ -48,6 +52,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     @Override
     public void onDisable() {
+        activeDecay.clear();
         saveQueuedRegrowth();
     }
 
@@ -58,7 +63,9 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     @Override
     public String status() {
-        return "Plant regrowth has " + pendingRegrowth.size() + " queued structure(s), " + activeRegrowth.size() + " actively growing.";
+        return "Plant regrowth has " + pendingRegrowth.size() + " queued structure(s), "
+                + activeRegrowth.size() + " actively growing, "
+                + activeDecay.size() + " decaying plant(s).";
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -72,6 +79,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         String brokenBlockKey = PendingRegrowth.keyFor(block);
         PendingRegrowth anchoredPending = pendingRegrowth.get(brokenBlockKey);
         if (anchoredPending != null && block.getType() == anchoredPending.anchorMaterial()) {
+            schedulePlantDecay(block, currentConfig);
             cancelRegrowth(anchoredPending);
             return;
         }
@@ -89,6 +97,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
         Block baseBlock = findBaseOfSameType(block);
         if (isSameBlock(block, baseBlock)) {
+            schedulePlantDecay(baseBlock, currentConfig);
             cancelAnchoredRegrowth(baseBlock);
             return;
         }
@@ -132,6 +141,109 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         pendingRegrowth.remove(pending.key());
         unregisterActiveRegrowth(pending.key());
         saveQueuedRegrowth();
+    }
+
+    private void schedulePlantDecay(Block baseBlock, PlantRegrowthConfig currentConfig) {
+        if (!currentConfig.plantDecayEnabled() || !isDecayMaterial(baseBlock.getType())) {
+            return;
+        }
+
+        Deque<PlantDecayPlan.DecayBlock> blocks = collectDecayBlocks(baseBlock, currentConfig.plantDecayMaxBlocks());
+        if (blocks.isEmpty()) {
+            return;
+        }
+
+        String key = PendingRegrowth.keyFor(baseBlock);
+        PlantDecayPlan plan = new PlantDecayPlan(baseBlock.getType(), blocks);
+        if (activeDecay.putIfAbsent(key, plan) != null) {
+            return;
+        }
+
+        Location location = baseBlock.getLocation();
+        Bukkit.getRegionScheduler().runDelayed(
+                plugin,
+                location,
+                task -> runPlantDecay(key, location, plan),
+                currentConfig.plantDecayDelayTicks()
+        );
+    }
+
+    private Deque<PlantDecayPlan.DecayBlock> collectDecayBlocks(Block baseBlock, int maxBlocks) {
+        Deque<PlantDecayPlan.DecayBlock> decayBlocks = new ArrayDeque<>();
+        Queue<Block> queue = new ArrayDeque<>();
+        Set<String> visited = new HashSet<>();
+        Material material = baseBlock.getType();
+        int baseY = baseBlock.getY();
+
+        queue.add(baseBlock.getRelative(0, 1, 0));
+        while (!queue.isEmpty() && decayBlocks.size() < maxBlocks) {
+            Block block = queue.poll();
+            if (block.getY() <= baseY || !visited.add(PendingRegrowth.keyFor(block)) || !canInspectDecayBlock(block)) {
+                continue;
+            }
+            if (block.getType() != material) {
+                continue;
+            }
+
+            decayBlocks.add(new PlantDecayPlan.DecayBlock(block.getX(), block.getY(), block.getZ()));
+            queue.add(block.getRelative(1, 0, 0));
+            queue.add(block.getRelative(-1, 0, 0));
+            queue.add(block.getRelative(0, 1, 0));
+            queue.add(block.getRelative(0, -1, 0));
+            queue.add(block.getRelative(0, 0, 1));
+            queue.add(block.getRelative(0, 0, -1));
+        }
+
+        return decayBlocks;
+    }
+
+    private void runPlantDecay(String key, Location location, PlantDecayPlan plan) {
+        PlantRegrowthConfig currentConfig = config;
+        World world = location.getWorld();
+        if (world == null || !currentConfig.plantDecayEnabled()) {
+            activeDecay.remove(key, plan);
+            return;
+        }
+
+        if (!canWorkAt(location, currentConfig)) {
+            schedulePlantDecayStep(key, location, plan, currentConfig.retryDelayTicks());
+            return;
+        }
+
+        int removed = 0;
+        while (removed < currentConfig.plantDecayBlocksPerStep() && !plan.isFinished()) {
+            PlantDecayPlan.DecayBlock next = plan.peekNext();
+            if (next == null) {
+                break;
+            }
+            if (!isDecayBlockLoadedAndOwned(world, next)) {
+                schedulePlantDecayStep(key, location, plan, currentConfig.retryDelayTicks());
+                return;
+            }
+
+            Block block = world.getBlockAt(next.x(), next.y(), next.z());
+            plan.removeNext();
+            if (block.getType() == plan.originalMaterial()) {
+                block.setType(Material.AIR, false);
+                removed++;
+            }
+        }
+
+        if (plan.isFinished()) {
+            activeDecay.remove(key, plan);
+            return;
+        }
+
+        schedulePlantDecayStep(key, location, plan, currentConfig.plantDecayStepTicks());
+    }
+
+    private void schedulePlantDecayStep(String key, Location location, PlantDecayPlan plan, long delayTicks) {
+        Bukkit.getRegionScheduler().runDelayed(
+                plugin,
+                location,
+                task -> runPlantDecay(key, location, plan),
+                Math.max(1L, delayTicks)
+        );
     }
 
     private boolean interruptActiveRegrowth(Block block, PlantRegrowthConfig currentConfig) {
@@ -390,6 +502,25 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         return isNearPlayer(location, currentConfig.requiredPlayerDistanceChunks());
     }
 
+    private boolean canInspectDecayBlock(Block block) {
+        int chunkX = block.getX() >> 4;
+        int chunkZ = block.getZ() >> 4;
+        return block.getWorld().isChunkLoaded(chunkX, chunkZ)
+                && Bukkit.isOwnedByCurrentRegion(block.getWorld(), chunkX, chunkZ, 0);
+    }
+
+    private boolean isDecayBlockLoadedAndOwned(World world, PlantDecayPlan.DecayBlock block) {
+        int chunkX = block.x() >> 4;
+        int chunkZ = block.z() >> 4;
+        return world.isChunkLoaded(chunkX, chunkZ)
+                && Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0);
+    }
+
+    private boolean isDecayMaterial(Material material) {
+        String name = material.name();
+        return name.endsWith("_LOG") || name.endsWith("_STEM") || material == Material.MUSHROOM_STEM;
+    }
+
     private boolean areChunksLoaded(World world, int chunkX, int chunkZ, int radius) {
         for (int x = chunkX - radius; x <= chunkX + radius; x++) {
             for (int z = chunkZ - radius; z <= chunkZ + radius; z++) {
@@ -450,6 +581,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
         Block base = baseBlock.get();
         if (isSameBlock(block, base)) {
+            schedulePlantDecay(base, currentConfig);
             cancelAnchoredRegrowth(base);
             return Optional.empty();
         }

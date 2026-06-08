@@ -20,6 +20,15 @@ retry-delay-ticks: 6000
 # 0 means retry forever. Positive values remove the queued tree after that many attempts.
 max-regrowth-attempts: 0
 
+# When a lowest trunk/stem anchor is cut, the disconnected natural plant above it
+# can decay instead of hanging forever. Default delay: 5 minutes at 20 TPS.
+plant-decay:
+  enabled: true
+  delay-ticks: 6000
+  step-ticks: 20
+  blocks-per-step: 1
+  max-blocks: 128
+
 # Require an online player within this many chunks of the tree base.
 # Set to 0 to disable this distance check.
 required-player-distance-chunks: 8

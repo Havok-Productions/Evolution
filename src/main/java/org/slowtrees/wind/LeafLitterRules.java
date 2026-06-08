@@ -12,6 +12,7 @@ final class LeafLitterRules {
             Material.COARSE_DIRT,
             Material.PODZOL,
             Material.ROOTED_DIRT,
+            Material.DIRT_PATH,
             Material.MOSS_BLOCK,
             Material.MUD,
             Material.STONE,
@@ -42,7 +43,7 @@ final class LeafLitterRules {
 
         return airBlock.getY() >= world.getMinHeight()
                 && airBlock.getY() < world.getMaxHeight()
-                && (airBlock.getLightFromSky() >= 8 || airBlock.getLightLevel() >= 13);
+                && (airBlock.getLightFromSky() > 0 || airBlock.getLightLevel() >= 8);
     }
 
     boolean isLeaf(Material material) {

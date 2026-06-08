@@ -12,6 +12,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -38,6 +39,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     private final ConcurrentMap<String, Long> nextPortalScanMillis = new ConcurrentHashMap<>();
     private final NetherTerrainMimic terrainMimic = new NetherTerrainMimic();
     private final Random random = new Random();
+    private final AtomicLong changedBlocks = new AtomicLong();
     private volatile NetherCorruptionConfig config;
 
     public NetherCorruptionFeature(SlowTreesPlugin plugin) {
@@ -63,7 +65,8 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     @Override
     public String status() {
-        return "Nether corruption is tracking " + sources.size() + " portal source(s).";
+        return "Nether corruption is tracking " + sources.size()
+                + " portal source(s), changed " + changedBlocks.get() + " block(s) since reload.";
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -145,6 +148,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         PortalSource previous = sources.putIfAbsent(source.key(), source);
         if (previous == null) {
             saveSources();
+            plugin.getLogger().info("Tracking Nether corruption source at " + source.shortDescription() + ".");
             scheduleSpread(source, Math.min(20L, currentConfig.spreadStepTicks()));
         }
     }
@@ -203,6 +207,9 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
                 changed++;
             }
         }
+        if (changed > 0) {
+            changedBlocks.addAndGet(changed);
+        }
 
         scheduleSpread(source, currentConfig.spreadStepTicks());
     }
@@ -239,26 +246,29 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     private Optional<Block> randomTarget(PortalSource source, World world, NetherCorruptionConfig currentConfig) {
         int dx = random.nextInt(currentConfig.maxRadius() * 2 + 1) - currentConfig.maxRadius();
-        int dy = random.nextInt(currentConfig.verticalRadius() * 2 + 1) - currentConfig.verticalRadius();
         int dz = random.nextInt(currentConfig.maxRadius() * 2 + 1) - currentConfig.maxRadius();
         if ((dx * dx) + (dz * dz) > currentConfig.maxRadius() * currentConfig.maxRadius()) {
             return Optional.empty();
         }
 
         int x = source.centerX() + dx;
-        int y = source.centerY() + dy;
         int z = source.centerZ() + dz;
-        if (y < world.getMinHeight() || y >= world.getMaxHeight()) {
-            return Optional.empty();
-        }
-
         int chunkX = x >> 4;
         int chunkZ = z >> 4;
         if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
             return Optional.empty();
         }
 
-        return Optional.of(world.getBlockAt(x, y, z));
+        int startY = Math.min(world.getMaxHeight() - 1, source.centerY() + currentConfig.verticalRadius());
+        int endY = Math.max(world.getMinHeight(), source.centerY() - currentConfig.verticalRadius());
+        for (int y = startY; y >= endY; y--) {
+            Block block = world.getBlockAt(x, y, z);
+            if (terrainMimic.canMimic(block.getType())) {
+                return Optional.of(block);
+            }
+        }
+
+        return Optional.empty();
     }
 
     private List<Block> findConnectedPortalBlocks(Block start) {

@@ -5,6 +5,7 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -25,6 +26,8 @@ public final class WindFeature implements PluginFeature, Listener {
     private final Random random = new Random();
     private final LeafLitterRules leafLitterRules = new LeafLitterRules();
     private final ConcurrentMap<UUID, Long> nextLitterAttemptMillis = new ConcurrentHashMap<>();
+    private final AtomicLong leafParticlesSpawned = new AtomicLong();
+    private final AtomicLong leafLitterPlaced = new AtomicLong();
     private volatile WindConfig config;
     private volatile WindPattern pattern = WindPattern.calm();
 
@@ -52,7 +55,9 @@ public final class WindFeature implements PluginFeature, Listener {
 
     @Override
     public String status() {
-        return "Wind is " + (config.enabled() ? "enabled" : "disabled") + ".";
+        return "Wind is " + (config.enabled() ? "enabled" : "disabled")
+                + ". Leaf particles: " + leafParticlesSpawned.get()
+                + ", leaf litter placed: " + leafLitterPlaced.get() + ".";
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -157,6 +162,7 @@ public final class WindFeature implements PluginFeature, Listener {
                     leafData
             );
         }
+        leafParticlesSpawned.addAndGet(count);
     }
 
     private void maybePlaceLeafLitter(Player player, Block canopy, WindPattern currentPattern, WindConfig currentConfig) {
@@ -187,9 +193,9 @@ public final class WindFeature implements PluginFeature, Listener {
 
             Block block = target.get();
             if (isNearPlayer(block.getLocation(), currentConfig.requiredPlayerDistanceChunks())
-                    && leafLitterRules.canPlace(block)
                     && countLeafLitterInChunk(block) < currentConfig.maxLeafLitterPerChunk()) {
                 block.setType(Material.LEAF_LITTER, false);
+                leafLitterPlaced.incrementAndGet();
                 return;
             }
         }
@@ -207,11 +213,11 @@ public final class WindFeature implements PluginFeature, Listener {
             return Optional.empty();
         }
 
-        int startY = Math.min(world.getMaxHeight() - 1, canopy.getY() + 2);
-        int endY = Math.max(world.getMinHeight(), canopy.getY() - 24);
+        int startY = Math.min(world.getMaxHeight() - 1, canopy.getY() + 3);
+        int endY = Math.max(world.getMinHeight(), canopy.getY() - 48);
         for (int y = startY; y >= endY; y--) {
             Block block = world.getBlockAt(x, y, z);
-            if (block.getType().isAir() && !block.getRelative(0, -1, 0).getType().isAir()) {
+            if (leafLitterRules.canPlace(block)) {
                 return Optional.of(block);
             }
         }
