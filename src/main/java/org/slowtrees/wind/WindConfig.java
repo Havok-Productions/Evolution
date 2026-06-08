@@ -15,6 +15,7 @@ final class WindConfig {
     private final int clearDriftRadius;
     private final int rainDriftRadius;
     private final int stormDriftRadius;
+    private final int debugRecentEvents;
 
     private WindConfig(
             boolean enabled,
@@ -27,7 +28,8 @@ final class WindConfig {
             int placementAttempts,
             int clearDriftRadius,
             int rainDriftRadius,
-            int stormDriftRadius
+            int stormDriftRadius,
+            int debugRecentEvents
     ) {
         this.enabled = enabled;
         this.gustTickInterval = gustTickInterval;
@@ -40,6 +42,7 @@ final class WindConfig {
         this.clearDriftRadius = clearDriftRadius;
         this.rainDriftRadius = rainDriftRadius;
         this.stormDriftRadius = stormDriftRadius;
+        this.debugRecentEvents = debugRecentEvents;
     }
 
     static WindConfig load(SlowTreesPlugin plugin) {
@@ -55,7 +58,8 @@ final class WindConfig {
                 Math.max(1, config.getInt("wind.leaf-litter.placement-attempts", 32)),
                 Math.max(1, config.getInt("wind.weather.clear-drift-radius", 10)),
                 Math.max(1, config.getInt("wind.weather.rain-drift-radius", 4)),
-                Math.max(1, config.getInt("wind.weather.storm-drift-radius", 16))
+                Math.max(1, config.getInt("wind.weather.storm-drift-radius", 16)),
+                Math.max(0, config.getInt("wind.debug.recent-events", 40))
         );
     }
 
@@ -99,5 +103,9 @@ final class WindConfig {
             return rainDriftRadius;
         }
         return clearDriftRadius;
+    }
+
+    int debugRecentEvents() {
+        return debugRecentEvents;
     }
 }

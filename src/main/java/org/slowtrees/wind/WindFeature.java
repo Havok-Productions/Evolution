@@ -88,12 +88,16 @@ public final class WindFeature implements PluginFeature, Listener {
         WindPattern currentPattern = currentPattern(currentConfig);
         Location playerLocation = player.getLocation();
         World world = playerLocation.getWorld();
-        if (world != null && world.getEnvironment() == World.Environment.NORMAL) {
+        if (world == null) {
+            diagnostics.recordEvent(currentConfig, "wind-skip: player has no world");
+        } else if (world.getEnvironment() == World.Environment.NORMAL) {
             Optional<Block> canopy = findNearbyCanopy(playerLocation, currentConfig.treeSearchRadius());
             canopy.ifPresent(block -> {
                 spawnLeafDrift(player, block, currentPattern, currentConfig);
                 maybePlaceLeafLitter(player, block, currentPattern, currentConfig);
             });
+        } else {
+            diagnostics.recordEvent(currentConfig, "wind-skip: world environment is " + world.getEnvironment());
         }
 
         schedulePlayerWind(player, currentConfig.gustTickInterval());
@@ -130,11 +134,13 @@ public final class WindFeature implements PluginFeature, Listener {
                 Block block = world.getBlockAt(x, y, z);
                 if (leafLitterRules.isLeaf(block.getType())) {
                     diagnostics.recordCanopyFound();
+                    diagnostics.recordEvent(config, "canopy-found: leaf=" + block.getType() + " at " + format(block));
                     return Optional.of(block);
                 }
             }
         }
 
+        diagnostics.recordEvent(config, "canopy-failed: no leaves found near " + format(origin) + " radius=" + radius);
         return Optional.empty();
     }
 
@@ -169,6 +175,7 @@ public final class WindFeature implements PluginFeature, Listener {
 
     private void maybePlaceLeafLitter(Player player, Block canopy, WindPattern currentPattern, WindConfig currentConfig) {
         if (currentConfig.maxLeafLitterPerChunk() <= 0) {
+            diagnostics.recordEvent(currentConfig, "litter-skip: max-per-chunk is 0 at " + format(canopy));
             return;
         }
 
@@ -184,14 +191,19 @@ public final class WindFeature implements PluginFeature, Listener {
         boolean storm = world.hasStorm() && world.isThundering();
         boolean rain = world.hasStorm();
         int driftRadius = currentConfig.driftRadius(storm, rain);
+        diagnostics.recordEvent(currentConfig, "litter-trigger: canopy=" + format(canopy)
+                + " weather=" + weatherName(storm, rain)
+                + " drift-radius=" + driftRadius
+                + " attempts=" + currentConfig.placementAttempts());
         if (rain && !storm && random.nextInt(100) < 25) {
             diagnostics.recordRainSkip();
+            diagnostics.recordEvent(currentConfig, "litter-skip: rain settling roll skipped at " + format(canopy));
             diagnostics.saveSoon(plugin, currentConfig);
             return;
         }
 
         for (int attempt = 0; attempt < currentConfig.placementAttempts(); attempt++) {
-            Optional<Block> target = findLitterTarget(canopy, currentPattern, driftRadius);
+            Optional<Block> target = findLitterTarget(canopy, currentPattern, driftRadius, currentConfig, attempt < 3);
             if (target.isEmpty()) {
                 diagnostics.recordNoTarget();
                 continue;
@@ -201,21 +213,27 @@ public final class WindFeature implements PluginFeature, Listener {
             Block block = target.get();
             if (!isNearPlayer(block.getLocation(), currentConfig.requiredPlayerDistanceChunks())) {
                 diagnostics.recordPlayerDistanceReject();
+                diagnostics.recordEvent(currentConfig, "litter-failed: target too far from player at " + format(block));
                 continue;
             }
             if (countLeafLitterInChunk(block) >= currentConfig.maxLeafLitterPerChunk()) {
                 diagnostics.recordChunkCapReject();
+                diagnostics.recordEvent(currentConfig, "litter-failed: chunk cap reached at " + format(block)
+                        + " max=" + currentConfig.maxLeafLitterPerChunk());
                 continue;
             }
             block.setType(Material.LEAF_LITTER, false);
             diagnostics.recordLitterPlaced();
+            diagnostics.recordEvent(currentConfig, "litter-placed: target=" + format(block)
+                    + " below=" + block.getRelative(0, -1, 0).getType());
             diagnostics.saveSoon(plugin, currentConfig);
             return;
         }
+        diagnostics.recordEvent(currentConfig, "litter-failed: all attempts rejected near canopy " + format(canopy));
         diagnostics.saveSoon(plugin, currentConfig);
     }
 
-    private Optional<Block> findLitterTarget(Block canopy, WindPattern currentPattern, int driftRadius) {
+    private Optional<Block> findLitterTarget(Block canopy, WindPattern currentPattern, int driftRadius, WindConfig currentConfig, boolean recordFailure) {
         World world = canopy.getWorld();
         int downwind = 1 + (int) Math.round(Math.pow(random.nextDouble(), 1.8D) * Math.max(1, driftRadius));
         int scatter = Math.max(1, driftRadius / 3);
@@ -224,18 +242,38 @@ public final class WindFeature implements PluginFeature, Listener {
         int chunkX = x >> 4;
         int chunkZ = z >> 4;
         if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+            if (recordFailure) {
+                diagnostics.recordEvent(currentConfig, "target-failed: chunk not loaded or not region-owned at chunk "
+                        + chunkX + "," + chunkZ + " from canopy " + format(canopy));
+            }
             return Optional.empty();
         }
 
         int startY = Math.min(world.getMaxHeight() - 1, canopy.getY() + 3);
         int endY = Math.max(world.getMinHeight(), canopy.getY() - 48);
+        Block firstPotentialSurface = null;
+        String firstPotentialFailure = null;
         for (int y = startY; y >= endY; y--) {
             Block block = world.getBlockAt(x, y, z);
-            if (leafLitterRules.canPlace(block)) {
+            String failure = leafLitterRules.placementFailure(block);
+            if (failure == null) {
                 return Optional.of(block);
+            }
+            if (recordFailure && firstPotentialSurface == null && leafLitterRules.isPotentialSurfaceSpace(block)) {
+                firstPotentialSurface = block;
+                firstPotentialFailure = failure;
             }
         }
 
+        if (recordFailure) {
+            if (firstPotentialSurface == null) {
+                diagnostics.recordEvent(currentConfig, "target-failed: no surface candidate at x=" + x
+                        + " z=" + z + " y=" + startY + ".." + endY + " from canopy " + format(canopy));
+            } else {
+                diagnostics.recordEvent(currentConfig, "target-failed: " + firstPotentialFailure
+                        + " at " + format(firstPotentialSurface));
+            }
+        }
         return Optional.empty();
     }
 
@@ -282,5 +320,25 @@ public final class WindFeature implements PluginFeature, Listener {
         }
 
         return false;
+    }
+
+    private String weatherName(boolean storm, boolean rain) {
+        if (storm) {
+            return "storm";
+        }
+        if (rain) {
+            return "rain";
+        }
+        return "clear";
+    }
+
+    private String format(Block block) {
+        return format(block.getLocation());
+    }
+
+    private String format(Location location) {
+        World world = location.getWorld();
+        String worldName = world == null ? "unknown" : world.getName();
+        return worldName + " " + location.getBlockX() + "," + location.getBlockY() + "," + location.getBlockZ();
     }
 }

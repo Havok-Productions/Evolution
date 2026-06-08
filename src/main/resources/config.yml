@@ -103,3 +103,5 @@ wind:
     placement-step-ticks: 300
     placement-attempts: 32
     max-per-chunk: 16
+  debug:
+    recent-events: 40

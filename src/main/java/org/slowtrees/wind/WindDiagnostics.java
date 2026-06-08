@@ -2,6 +2,11 @@ package org.slowtrees.wind;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
@@ -22,6 +27,7 @@ final class WindDiagnostics {
     private final AtomicLong litterPlaced = new AtomicLong();
     private final AtomicBoolean saveRunning = new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
+    private final Deque<String> recentEvents = new ArrayDeque<>();
 
     void recordCanopySearch() {
         canopySearches.incrementAndGet();
@@ -61,6 +67,20 @@ final class WindDiagnostics {
 
     void recordLitterPlaced() {
         litterPlaced.incrementAndGet();
+    }
+
+    void recordEvent(WindConfig config, String event) {
+        int maxEvents = config.debugRecentEvents();
+        if (maxEvents <= 0) {
+            return;
+        }
+
+        synchronized (recentEvents) {
+            recentEvents.addLast(Instant.now() + " " + event);
+            while (recentEvents.size() > maxEvents) {
+                recentEvents.removeFirst();
+            }
+        }
     }
 
     long leafParticlesSpawned() {
@@ -111,6 +131,7 @@ final class WindDiagnostics {
         yaml.set("wind.counters.litter-rejected-player-distance", litterRejectedPlayerDistance.get());
         yaml.set("wind.counters.litter-rejected-chunk-cap", litterRejectedChunkCap.get());
         yaml.set("wind.counters.litter-placed", litterPlaced.get());
+        yaml.set("wind.recent-events", recentEventsSnapshot());
         yaml.set("wind.notes", "If canopies-found rises but litter-targets-found stays 0, no valid natural ground target was found.");
 
         File file = new File(plugin.getDataFolder(), "debug.yml");
@@ -124,6 +145,12 @@ final class WindDiagnostics {
             yaml.save(file);
         } catch (IOException ex) {
             plugin.getLogger().log(Level.WARNING, "Could not save SlowTrees debug.yml.", ex);
+        }
+    }
+
+    private List<String> recentEventsSnapshot() {
+        synchronized (recentEvents) {
+            return new ArrayList<>(recentEvents);
         }
     }
 }
