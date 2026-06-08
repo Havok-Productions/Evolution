@@ -21,29 +21,37 @@ final class LeafLitterRules {
             Material.GRANITE,
             Material.TUFF
     );
+    private static final Set<Material> REPLACEABLE_SURFACE_SPACE = Set.of(
+            Material.AIR,
+            Material.CAVE_AIR,
+            Material.VOID_AIR,
+            Material.SHORT_GRASS,
+            Material.FERN,
+            Material.SNOW
+    );
 
-    boolean canPlace(Block airBlock) {
-        if (airBlock.getType() != Material.AIR) {
+    boolean canPlace(Block targetBlock) {
+        if (!REPLACEABLE_SURFACE_SPACE.contains(targetBlock.getType())) {
             return false;
         }
 
-        World world = airBlock.getWorld();
-        if (!airBlock.getRelative(0, 1, 0).getType().isAir()) {
+        World world = targetBlock.getWorld();
+        if (!targetBlock.getRelative(0, 1, 0).getType().isAir()) {
             return false;
         }
 
-        Block ground = airBlock.getRelative(0, -1, 0);
+        Block ground = targetBlock.getRelative(0, -1, 0);
         if (!NATURAL_GROUND.contains(ground.getType())) {
             return false;
         }
 
-        if (ground.isLiquid() || airBlock.isLiquid()) {
+        if (ground.isLiquid() || targetBlock.isLiquid()) {
             return false;
         }
 
-        return airBlock.getY() >= world.getMinHeight()
-                && airBlock.getY() < world.getMaxHeight()
-                && (airBlock.getLightFromSky() > 0 || airBlock.getLightLevel() >= 8);
+        return targetBlock.getY() >= world.getMinHeight()
+                && targetBlock.getY() < world.getMaxHeight()
+                && (targetBlock.getLightFromSky() > 0 || targetBlock.getLightLevel() >= 8);
     }
 
     boolean isLeaf(Material material) {

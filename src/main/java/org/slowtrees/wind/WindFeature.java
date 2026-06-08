@@ -5,7 +5,6 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -26,8 +25,7 @@ public final class WindFeature implements PluginFeature, Listener {
     private final Random random = new Random();
     private final LeafLitterRules leafLitterRules = new LeafLitterRules();
     private final ConcurrentMap<UUID, Long> nextLitterAttemptMillis = new ConcurrentHashMap<>();
-    private final AtomicLong leafParticlesSpawned = new AtomicLong();
-    private final AtomicLong leafLitterPlaced = new AtomicLong();
+    private final WindDiagnostics diagnostics = new WindDiagnostics();
     private volatile WindConfig config;
     private volatile WindPattern pattern = WindPattern.calm();
 
@@ -45,6 +43,7 @@ public final class WindFeature implements PluginFeature, Listener {
 
     @Override
     public void onDisable() {
+        diagnostics.saveAsync(plugin, config);
         nextLitterAttemptMillis.clear();
     }
 
@@ -55,9 +54,10 @@ public final class WindFeature implements PluginFeature, Listener {
 
     @Override
     public String status() {
+        diagnostics.saveAsync(plugin, config);
         return "Wind is " + (config.enabled() ? "enabled" : "disabled")
-                + ". Leaf particles: " + leafParticlesSpawned.get()
-                + ", leaf litter placed: " + leafLitterPlaced.get() + ".";
+                + ". Leaf particles: " + diagnostics.leafParticlesSpawned()
+                + ", leaf litter placed: " + diagnostics.litterPlaced() + ".";
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -114,6 +114,7 @@ public final class WindFeature implements PluginFeature, Listener {
             return Optional.empty();
         }
 
+        diagnostics.recordCanopySearch();
         for (int attempt = 0; attempt < 64; attempt++) {
             int x = origin.getBlockX() + random.nextInt(radius * 2 + 1) - radius;
             int z = origin.getBlockZ() + random.nextInt(radius * 2 + 1) - radius;
@@ -128,6 +129,7 @@ public final class WindFeature implements PluginFeature, Listener {
             for (int y = startY; y >= endY; y--) {
                 Block block = world.getBlockAt(x, y, z);
                 if (leafLitterRules.isLeaf(block.getType())) {
+                    diagnostics.recordCanopyFound();
                     return Optional.of(block);
                 }
             }
@@ -162,7 +164,7 @@ public final class WindFeature implements PluginFeature, Listener {
                     leafData
             );
         }
-        leafParticlesSpawned.addAndGet(count);
+        diagnostics.recordLeafParticles(count);
     }
 
     private void maybePlaceLeafLitter(Player player, Block canopy, WindPattern currentPattern, WindConfig currentConfig) {
@@ -177,28 +179,40 @@ public final class WindFeature implements PluginFeature, Listener {
         }
 
         nextLitterAttemptMillis.put(player.getUniqueId(), now + (currentConfig.leafLitterPlacementTicks() * 50L));
+        diagnostics.recordLitterCycle();
         World world = canopy.getWorld();
         boolean storm = world.hasStorm() && world.isThundering();
         boolean rain = world.hasStorm();
         int driftRadius = currentConfig.driftRadius(storm, rain);
         if (rain && !storm && random.nextInt(100) < 25) {
+            diagnostics.recordRainSkip();
+            diagnostics.saveSoon(plugin, currentConfig);
             return;
         }
 
         for (int attempt = 0; attempt < currentConfig.placementAttempts(); attempt++) {
             Optional<Block> target = findLitterTarget(canopy, currentPattern, driftRadius);
             if (target.isEmpty()) {
+                diagnostics.recordNoTarget();
                 continue;
             }
+            diagnostics.recordTargetFound();
 
             Block block = target.get();
-            if (isNearPlayer(block.getLocation(), currentConfig.requiredPlayerDistanceChunks())
-                    && countLeafLitterInChunk(block) < currentConfig.maxLeafLitterPerChunk()) {
-                block.setType(Material.LEAF_LITTER, false);
-                leafLitterPlaced.incrementAndGet();
-                return;
+            if (!isNearPlayer(block.getLocation(), currentConfig.requiredPlayerDistanceChunks())) {
+                diagnostics.recordPlayerDistanceReject();
+                continue;
             }
+            if (countLeafLitterInChunk(block) >= currentConfig.maxLeafLitterPerChunk()) {
+                diagnostics.recordChunkCapReject();
+                continue;
+            }
+            block.setType(Material.LEAF_LITTER, false);
+            diagnostics.recordLitterPlaced();
+            diagnostics.saveSoon(plugin, currentConfig);
+            return;
         }
+        diagnostics.saveSoon(plugin, currentConfig);
     }
 
     private Optional<Block> findLitterTarget(Block canopy, WindPattern currentPattern, int driftRadius) {

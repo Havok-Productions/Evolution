@@ -16,6 +16,8 @@ public final class SlowTreesPlugin extends JavaPlugin {
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        getConfig().options().copyDefaults(true);
+        saveConfig();
         registerFeature(new PlantRegrowthFeature(this));
         registerFeature(new NetherCorruptionFeature(this));
         registerFeature(new WindFeature(this));
