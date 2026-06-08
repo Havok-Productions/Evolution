@@ -36,6 +36,15 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 - Keeps Nether mimic rules in code instead of exposing replacement maps.
 - Skips work when target chunks are unloaded, outside configured player distance, or outside the current Folia region.
 
+## Wind
+
+- Represents wind through drifting leaves near tree canopies.
+- Changes wind direction and strength slowly over time.
+- Places subtle leaf litter downwind in uneven clusters.
+- Requires surface-only natural ground, air above the target, and sky or strong surface light.
+- Avoids player blocks, liquids, caves, unloaded chunks, distant players, and non-owned Folia regions.
+- Rain keeps leaves closer to trees, while storms push them farther and show stronger gusts.
+
 ## Commands
 
 - `/slowtrees reload` reloads `config.yml`.

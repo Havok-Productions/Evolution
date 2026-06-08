@@ -76,3 +76,20 @@ nether-corruption:
   vertical-radius: 8
   attempts-per-step: 24
   required-player-distance-chunks: 8
+
+# Wind is mostly visible through leaves. It spawns subtle falling-leaf motion near
+# tree canopies and rarely lets leaves settle into natural, surface-only litter.
+wind:
+  enabled: true
+  gust-tick-interval: 20
+  pattern-change-ticks: 6000
+  tree-search-radius: 10
+  required-player-distance-chunks: 6
+  weather:
+    clear-drift-radius: 10
+    rain-drift-radius: 4
+    storm-drift-radius: 16
+  leaf-litter:
+    placement-step-ticks: 1200
+    placement-attempts: 8
+    max-per-chunk: 8

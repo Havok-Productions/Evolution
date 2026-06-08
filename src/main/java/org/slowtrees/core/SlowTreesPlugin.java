@@ -8,6 +8,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.slowtrees.nether.NetherCorruptionFeature;
 import org.slowtrees.regrowth.PlantRegrowthFeature;
+import org.slowtrees.wind.WindFeature;
 
 public final class SlowTreesPlugin extends JavaPlugin {
     private final List<PluginFeature> features = new ArrayList<>();
@@ -17,6 +18,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
         saveDefaultConfig();
         registerFeature(new PlantRegrowthFeature(this));
         registerFeature(new NetherCorruptionFeature(this));
+        registerFeature(new WindFeature(this));
         features.forEach(PluginFeature::onEnable);
         getLogger().info("SlowTrees enabled with " + features.size() + " feature module(s).");
     }
