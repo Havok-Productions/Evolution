@@ -109,7 +109,7 @@ public final class WindFeature implements PluginFeature, Listener {
             return Optional.empty();
         }
 
-        for (int attempt = 0; attempt < 16; attempt++) {
+        for (int attempt = 0; attempt < 64; attempt++) {
             int x = origin.getBlockX() + random.nextInt(radius * 2 + 1) - radius;
             int z = origin.getBlockZ() + random.nextInt(radius * 2 + 1) - radius;
             int startY = Math.min(world.getMaxHeight() - 1, origin.getBlockY() + 14);
@@ -135,7 +135,7 @@ public final class WindFeature implements PluginFeature, Listener {
         World world = canopy.getWorld();
         boolean storm = world.hasStorm() && world.isThundering();
         boolean rain = world.hasStorm();
-        int count = storm ? 5 : rain ? 1 : 3;
+        int count = storm ? 12 : rain ? 3 : 8;
         double drift = Math.max(0.05D, currentPattern.strength() * (storm ? 0.18D : rain ? 0.06D : 0.12D));
         Location start = canopy.getLocation().add(0.5D, -0.2D, 0.5D);
         BlockData leafData = canopy.getBlockData();
@@ -175,7 +175,7 @@ public final class WindFeature implements PluginFeature, Listener {
         boolean storm = world.hasStorm() && world.isThundering();
         boolean rain = world.hasStorm();
         int driftRadius = currentConfig.driftRadius(storm, rain);
-        if (rain && !storm && random.nextInt(100) < 45) {
+        if (rain && !storm && random.nextInt(100) < 25) {
             return;
         }
 

@@ -29,6 +29,7 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 ## Nether Corruption
 
 - Tracks newly created and player-used Nether portal clusters in Overworld worlds.
+- Also scans around nearby players so existing portals can become sources.
 - Slowly changes nearby natural terrain while the portal still exists.
 - Stops spreading when the portal is gone, while existing corruption remains.
 - Turns water into lava as corruption reaches it.
@@ -39,6 +40,7 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 ## Wind
 
 - Represents wind through drifting leaves near tree canopies.
+- Uses visible default tuning so leaf motion should be noticeable near trees.
 - Changes wind direction and strength slowly over time.
 - Places subtle leaf litter downwind in uneven clusters.
 - Requires surface-only natural ground, air above the target, and sky or strong surface light.

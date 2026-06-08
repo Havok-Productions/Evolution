@@ -46,13 +46,13 @@ final class WindConfig {
         FileConfiguration config = plugin.getConfig();
         return new WindConfig(
                 config.getBoolean("wind.enabled", true),
-                Math.max(5L, config.getLong("wind.gust-tick-interval", 20L)),
+                Math.max(5L, config.getLong("wind.gust-tick-interval", 10L)),
                 Math.max(100L, config.getLong("wind.pattern-change-ticks", 6000L)),
-                Math.max(20L, config.getLong("wind.leaf-litter.placement-step-ticks", 1200L)),
+                Math.max(20L, config.getLong("wind.leaf-litter.placement-step-ticks", 300L)),
                 Math.max(0, config.getInt("wind.required-player-distance-chunks", 6)),
-                Math.max(0, config.getInt("wind.leaf-litter.max-per-chunk", 8)),
-                Math.max(4, config.getInt("wind.tree-search-radius", 10)),
-                Math.max(1, config.getInt("wind.leaf-litter.placement-attempts", 8)),
+                Math.max(0, config.getInt("wind.leaf-litter.max-per-chunk", 16)),
+                Math.max(4, config.getInt("wind.tree-search-radius", 18)),
+                Math.max(1, config.getInt("wind.leaf-litter.placement-attempts", 32)),
                 Math.max(1, config.getInt("wind.weather.clear-drift-radius", 10)),
                 Math.max(1, config.getInt("wind.weather.rain-drift-radius", 4)),
                 Math.max(1, config.getInt("wind.weather.storm-drift-radius", 16))

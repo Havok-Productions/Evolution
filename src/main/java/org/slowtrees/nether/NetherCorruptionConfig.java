@@ -11,6 +11,7 @@ final class NetherCorruptionConfig {
     private final int verticalRadius;
     private final int attemptsPerStep;
     private final int requiredPlayerDistanceChunks;
+    private final int playerPortalScanRadius;
 
     private NetherCorruptionConfig(
             boolean enabled,
@@ -19,7 +20,8 @@ final class NetherCorruptionConfig {
             int maxRadius,
             int verticalRadius,
             int attemptsPerStep,
-            int requiredPlayerDistanceChunks
+            int requiredPlayerDistanceChunks,
+            int playerPortalScanRadius
     ) {
         this.enabled = enabled;
         this.spreadStepTicks = spreadStepTicks;
@@ -28,6 +30,7 @@ final class NetherCorruptionConfig {
         this.verticalRadius = verticalRadius;
         this.attemptsPerStep = attemptsPerStep;
         this.requiredPlayerDistanceChunks = requiredPlayerDistanceChunks;
+        this.playerPortalScanRadius = playerPortalScanRadius;
     }
 
     static NetherCorruptionConfig load(SlowTreesPlugin plugin) {
@@ -38,8 +41,9 @@ final class NetherCorruptionConfig {
                 Math.max(1, config.getInt("nether-corruption.blocks-per-step", 1)),
                 Math.max(1, config.getInt("nether-corruption.max-radius", 24)),
                 Math.max(1, config.getInt("nether-corruption.vertical-radius", 8)),
-                Math.max(1, config.getInt("nether-corruption.attempts-per-step", 24)),
-                Math.max(0, config.getInt("nether-corruption.required-player-distance-chunks", 8))
+                Math.max(1, config.getInt("nether-corruption.attempts-per-step", 96)),
+                Math.max(0, config.getInt("nether-corruption.required-player-distance-chunks", 8)),
+                Math.max(0, config.getInt("nether-corruption.player-portal-scan-radius", 32))
         );
     }
 
@@ -69,5 +73,9 @@ final class NetherCorruptionConfig {
 
     int requiredPlayerDistanceChunks() {
         return requiredPlayerDistanceChunks;
+    }
+
+    int playerPortalScanRadius() {
+        return playerPortalScanRadius;
     }
 }

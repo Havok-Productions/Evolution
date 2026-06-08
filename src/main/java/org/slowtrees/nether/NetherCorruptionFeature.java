@@ -26,6 +26,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.world.PortalCreateEvent;
 import org.slowtrees.core.PluginFeature;
@@ -34,6 +35,7 @@ import org.slowtrees.core.SlowTreesPlugin;
 public final class NetherCorruptionFeature implements PluginFeature, Listener {
     private final SlowTreesPlugin plugin;
     private final ConcurrentMap<String, PortalSource> sources = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> nextPortalScanMillis = new ConcurrentHashMap<>();
     private final NetherTerrainMimic terrainMimic = new NetherTerrainMimic();
     private final Random random = new Random();
     private volatile NetherCorruptionConfig config;
@@ -50,6 +52,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     @Override
     public void onDisable() {
+        nextPortalScanMillis.clear();
         saveSources();
     }
 
@@ -61,6 +64,31 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     @Override
     public String status() {
         return "Nether corruption is tracking " + sources.size() + " portal source(s).";
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPlayerMove(PlayerMoveEvent event) {
+        NetherCorruptionConfig currentConfig = config;
+        Location location = event.getTo();
+        World world = location.getWorld();
+        if (!currentConfig.enabled() || world == null || world.getEnvironment() != World.Environment.NORMAL) {
+            return;
+        }
+
+        String key = event.getPlayer().getUniqueId().toString();
+        long now = System.currentTimeMillis();
+        long nextScan = nextPortalScanMillis.getOrDefault(key, 0L);
+        if (now < nextScan) {
+            return;
+        }
+
+        nextPortalScanMillis.put(key, now + 5000L);
+        findNearbyPortalBlock(location, currentConfig.playerPortalScanRadius()).ifPresent(block -> {
+            List<Block> portalBlocks = findConnectedPortalBlocks(block);
+            if (!portalBlocks.isEmpty()) {
+                queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
+            }
+        });
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -91,7 +119,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             return;
         }
 
-        findNearbyPortalBlock(event.getFrom()).ifPresent(block -> {
+        findNearbyPortalBlock(event.getFrom(), 4).ifPresent(block -> {
             List<Block> portalBlocks = findConnectedPortalBlocks(block);
             if (!portalBlocks.isEmpty()) {
                 queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
@@ -117,7 +145,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         PortalSource previous = sources.putIfAbsent(source.key(), source);
         if (previous == null) {
             saveSources();
-            scheduleSpread(source, currentConfig.spreadStepTicks());
+            scheduleSpread(source, Math.min(20L, currentConfig.spreadStepTicks()));
         }
     }
 
@@ -258,7 +286,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         return found;
     }
 
-    private Optional<Block> findNearbyPortalBlock(Location location) {
+    private Optional<Block> findNearbyPortalBlock(Location location, int radius) {
         World world = location.getWorld();
         if (world == null) {
             return Optional.empty();
@@ -267,15 +295,29 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         int baseX = location.getBlockX();
         int baseY = location.getBlockY();
         int baseZ = location.getBlockZ();
-        for (int y = -2; y <= 2; y++) {
-            for (int x = -3; x <= 3; x++) {
-                for (int z = -3; z <= 3; z++) {
+        int horizontalRadius = Math.max(3, radius);
+        int verticalRadius = Math.min(8, Math.max(2, radius / 4));
+        for (int y = -verticalRadius; y <= verticalRadius; y++) {
+            for (int x = -horizontalRadius; x <= horizontalRadius; x++) {
+                for (int z = -horizontalRadius; z <= horizontalRadius; z++) {
+                    if ((x * x) + (z * z) > horizontalRadius * horizontalRadius) {
+                        continue;
+                    }
+
                     int blockY = baseY + y;
                     if (blockY < world.getMinHeight() || blockY >= world.getMaxHeight()) {
                         continue;
                     }
 
-                    Block block = world.getBlockAt(baseX + x, blockY, baseZ + z);
+                    int blockX = baseX + x;
+                    int blockZ = baseZ + z;
+                    int chunkX = blockX >> 4;
+                    int chunkZ = blockZ >> 4;
+                    if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+                        continue;
+                    }
+
+                    Block block = world.getBlockAt(blockX, blockY, blockZ);
                     if (block.getType() == Material.NETHER_PORTAL) {
                         return Optional.of(block);
                     }
