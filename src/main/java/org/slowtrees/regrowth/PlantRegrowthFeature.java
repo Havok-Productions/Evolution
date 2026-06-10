@@ -379,7 +379,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         active.unmarkPlaced(blockKey);
         activeBlockKeys.remove(blockKey);
         active.requeueFirst(block.getState());
-        active.resetCooldown(currentConfig.growthStepTicks());
+        active.resetCooldown(currentConfig.growthStepTicks(active.placedBlockCount()));
         plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-soft-requeue",
                 block.getType() + " at " + format(block.getLocation()) + " active=" + activeSummary(active));
         return true;
@@ -629,13 +629,17 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             return;
         }
 
-        plugin.pathDebug().trace(plugin, "regrowth", "place.batch", pending.treeType() + " placed=" + placed + " at " + format(location));
-        plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "place-next delay=" + currentConfig.growthStepTicks());
+        long nextGrowthDelay = currentConfig.growthStepTicks(active.placedBlockCount());
+        plugin.pathDebug().trace(plugin, "regrowth", "place.batch", pending.treeType()
+                + " placed=" + placed
+                + " total-placed=" + active.placedBlockCount()
+                + " at " + format(location));
+        plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "place-next delay=" + nextGrowthDelay);
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 location,
                 task -> placeNextBatch(active),
-                currentConfig.growthStepTicks()
+                nextGrowthDelay
         );
     }
 

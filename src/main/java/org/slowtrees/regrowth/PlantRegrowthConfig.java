@@ -22,6 +22,9 @@ final class PlantRegrowthConfig {
     private final int blocksPerGrowthStep;
     private final boolean worldHealthModeEnabled;
     private final double worldHealthGrowthSpeedMultiplier;
+    private final boolean dynamicSlowdownEnabled;
+    private final double dynamicSlowdownPerBlock;
+    private final double dynamicSlowdownMaxMultiplier;
     private final long retryDelayTicks;
     private final int maxRegrowthAttempts;
     private final boolean plantDecayEnabled;
@@ -43,6 +46,9 @@ final class PlantRegrowthConfig {
             int blocksPerGrowthStep,
             boolean worldHealthModeEnabled,
             double worldHealthGrowthSpeedMultiplier,
+            boolean dynamicSlowdownEnabled,
+            double dynamicSlowdownPerBlock,
+            double dynamicSlowdownMaxMultiplier,
             long retryDelayTicks,
             int maxRegrowthAttempts,
             boolean plantDecayEnabled,
@@ -63,6 +69,9 @@ final class PlantRegrowthConfig {
         this.blocksPerGrowthStep = blocksPerGrowthStep;
         this.worldHealthModeEnabled = worldHealthModeEnabled;
         this.worldHealthGrowthSpeedMultiplier = worldHealthGrowthSpeedMultiplier;
+        this.dynamicSlowdownEnabled = dynamicSlowdownEnabled;
+        this.dynamicSlowdownPerBlock = dynamicSlowdownPerBlock;
+        this.dynamicSlowdownMaxMultiplier = dynamicSlowdownMaxMultiplier;
         this.retryDelayTicks = retryDelayTicks;
         this.maxRegrowthAttempts = maxRegrowthAttempts;
         this.plantDecayEnabled = plantDecayEnabled;
@@ -106,6 +115,11 @@ final class PlantRegrowthConfig {
                 Math.max(1, config.getInt("blocks-per-growth-step", 1)),
                 config.getBoolean("world-health-mode.enabled", true),
                 sanitizeGrowthSpeedMultiplier(config.getDouble("world-health-mode.growth-speed-multiplier", 0.15D), logger),
+                config.getBoolean("world-health-mode.dynamic-slowdown.enabled", true),
+                sanitizeNonNegativeDouble(config.getDouble("world-health-mode.dynamic-slowdown.delay-growth-per-block", 0.02D),
+                        "world-health-mode.dynamic-slowdown.delay-growth-per-block", logger),
+                sanitizeMinimumDouble(config.getDouble("world-health-mode.dynamic-slowdown.max-delay-multiplier", 2.0D),
+                        1.0D, "world-health-mode.dynamic-slowdown.max-delay-multiplier", logger),
                 Math.max(1L, config.getLong("retry-delay-ticks", 6000L)),
                 Math.max(0, config.getInt("max-regrowth-attempts", 0)),
                 config.getBoolean("plant-decay.enabled", true),
@@ -148,11 +162,26 @@ final class PlantRegrowthConfig {
     }
 
     long growthStepTicks() {
+        return growthStepTicks(0);
+    }
+
+    long growthStepTicks(int placedBlocks) {
+        long baseTicks;
         if (!worldHealthModeEnabled) {
-            return growthStepTicks;
+            baseTicks = growthStepTicks;
+        } else {
+            baseTicks = Math.max(1L, Math.round(growthStepTicks / worldHealthGrowthSpeedMultiplier));
         }
 
-        return Math.max(1L, Math.round(growthStepTicks / worldHealthGrowthSpeedMultiplier));
+        if (!dynamicSlowdownEnabled || placedBlocks <= 0) {
+            return baseTicks;
+        }
+
+        double dynamicMultiplier = Math.min(
+                dynamicSlowdownMaxMultiplier,
+                1.0D + (placedBlocks * dynamicSlowdownPerBlock)
+        );
+        return Math.max(1L, Math.round(baseTicks * dynamicMultiplier));
     }
 
     int blocksPerGrowthStep() {
@@ -201,6 +230,9 @@ final class PlantRegrowthConfig {
                 + ", blocks-per-step=" + blocksPerGrowthStep
                 + ", world-health=" + worldHealthModeEnabled
                 + ", health-multiplier=" + worldHealthGrowthSpeedMultiplier
+                + ", dynamic-slowdown=" + dynamicSlowdownEnabled
+                + ", dynamic-per-block=" + dynamicSlowdownPerBlock
+                + ", dynamic-max=" + dynamicSlowdownMaxMultiplier
                 + ", retry=" + retryDelayTicks
                 + ", player-distance-chunks=" + requiredPlayerDistanceChunks
                 + ", owned-chunk-radius=" + ownedChunkRadius
@@ -223,6 +255,24 @@ final class PlantRegrowthConfig {
 
         logger.warning("world-health-mode.growth-speed-multiplier must be greater than 0. Using 1.0.");
         return 1.0D;
+    }
+
+    private static double sanitizeNonNegativeDouble(double value, String path, Logger logger) {
+        if (Double.isFinite(value) && value >= 0.0D) {
+            return value;
+        }
+
+        logger.warning(path + " must be 0 or greater. Using 0.");
+        return 0.0D;
+    }
+
+    private static double sanitizeMinimumDouble(double value, double minimum, String path, Logger logger) {
+        if (Double.isFinite(value) && value >= minimum) {
+            return value;
+        }
+
+        logger.warning(path + " must be at least " + minimum + ". Using " + minimum + ".");
+        return minimum;
     }
 
     private static Map<Material, TreeType> loadTreeTypeMap(FileConfiguration config, Logger logger, String path) {

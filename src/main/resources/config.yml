@@ -12,6 +12,12 @@ blocks-per-growth-step: 1
 world-health-mode:
   enabled: true
   growth-speed-multiplier: 0.15
+  # When enabled, each active plant regrowth gets gradually slower as it places
+  # more blocks. With the defaults, a 45 second step can grow toward 90 seconds.
+  dynamic-slowdown:
+    enabled: true
+    delay-growth-per-block: 0.02
+    max-delay-multiplier: 2.0
 
 # If a tree cannot regrow because the area is unloaded, too far from players,
 # or blocked by another region boundary, it retries later without loading chunks.
