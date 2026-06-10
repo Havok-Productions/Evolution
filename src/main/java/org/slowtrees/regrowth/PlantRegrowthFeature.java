@@ -43,6 +43,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     public PlantRegrowthFeature(SlowTreesPlugin plugin) {
         this.plugin = plugin;
         this.config = PlantRegrowthConfig.load(plugin);
+        plugin.pathDebug().trace(plugin, "regrowth", "config.load", config.summary());
     }
 
     @Override
@@ -60,6 +61,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     @Override
     public void reload() {
         this.config = PlantRegrowthConfig.load(plugin);
+        plugin.pathDebug().trace(plugin, "regrowth", "config.reload", config.summary());
     }
 
     @Override
@@ -174,6 +176,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
         Location location = baseBlock.getLocation();
         plugin.pathDebug().trace(plugin, "regrowth", "decay.schedule", "blocks=" + blocks.size() + " at " + format(location));
+        plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "plant-decay delay=" + currentConfig.plantDecayDelayTicks());
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 location,
@@ -233,6 +236,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
                 break;
             }
             if (!isDecayBlockLoadedAndOwned(world, next)) {
+                plugin.pathDebug().failure(plugin, "regrowth", "chunk-or-region-gate", "decay block " + next.x() + "," + next.y() + "," + next.z());
                 schedulePlantDecayStep(key, location, plan, currentConfig.retryDelayTicks());
                 return;
             }
@@ -256,6 +260,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     }
 
     private void schedulePlantDecayStep(String key, Location location, PlantDecayPlan plan, long delayTicks) {
+        plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "plant-decay-step delay=" + Math.max(1L, delayTicks));
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 location,
@@ -320,9 +325,11 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private void loadQueuedRegrowth() {
         File file = queueFile();
         if (!file.exists()) {
+            plugin.pathDebug().trace(plugin, "regrowth", "persistence.load-missing", "queued-regrowth.yml");
             return;
         }
 
+        plugin.pathDebug().trace(plugin, "regrowth", "persistence.load", "queued-regrowth.yml");
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
         ConfigurationSection trees = yaml.getConfigurationSection("trees");
         if (trees == null) {
@@ -338,14 +345,17 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             try {
                 PendingRegrowth pending = PendingRegrowth.from(section);
                 pendingRegrowth.put(pending.key(), pending);
+                plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "loaded-regrowth retry=" + config.retryDelayTicks());
                 scheduleAttempt(pending, config.retryDelayTicks());
             } catch (RuntimeException ex) {
+                plugin.pathDebug().failure(plugin, "regrowth", "persistence-invalid-entry", "queued-regrowth.yml entry skipped");
                 plugin.getLogger().warning("Skipping invalid queued plant regrowth entry '" + key + "': " + ex.getMessage());
             }
         }
     }
 
     private void saveQueuedRegrowth() {
+        plugin.pathDebug().trace(plugin, "regrowth", "persistence.save", "queued-regrowth.yml entries=" + pendingRegrowth.size());
         YamlConfiguration yaml = new YamlConfiguration();
         ConfigurationSection trees = yaml.createSection("trees");
         int index = 0;
@@ -371,10 +381,12 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         World world = pending.world();
         if (world == null) {
             plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-missing-world", pending.treeType().name());
+            plugin.pathDebug().failure(plugin, "regrowth", "missing-world", pending.treeType().name());
             removeRegrowth(pending);
             return;
         }
 
+        plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "regrowth-attempt delay=" + Math.max(1L, delayTicks));
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 pending.location(world),
@@ -388,6 +400,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         World world = pending.world();
         if (world == null || !currentConfig.isWorldAllowed(world)) {
             plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-world-disabled", pending.treeType().name());
+            plugin.pathDebug().failure(plugin, "regrowth", "world-disabled", pending.treeType().name());
             removeRegrowth(pending);
             return;
         }
@@ -401,6 +414,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
         if (!hasAnchorBlock(location, pending)) {
             plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-missing-anchor", format(location));
+            plugin.pathDebug().failure(plugin, "regrowth", "missing-anchor", format(location));
             removeRegrowth(pending);
             return;
         }
@@ -447,6 +461,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         Location location = pending.location(world);
         long remainingCooldownTicks = active.remainingCooldownTicks();
         if (remainingCooldownTicks > 0L) {
+            plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "growth-cooldown delay=" + remainingCooldownTicks);
             Bukkit.getRegionScheduler().runDelayed(
                     plugin,
                     location,
@@ -457,6 +472,8 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         }
 
         if (!canWorkAt(location, currentConfig)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "place.wait-cannot-work", format(location));
+            plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "place-retry delay=" + currentConfig.retryDelayTicks());
             Bukkit.getRegionScheduler().runDelayed(
                     plugin,
                     location,
@@ -467,6 +484,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         }
 
         if (!hasAnchorBlock(location, pending)) {
+            plugin.pathDebug().failure(plugin, "regrowth", "missing-anchor", format(location));
             removeRegrowth(pending);
             return;
         }
@@ -488,6 +506,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         }
 
         plugin.pathDebug().trace(plugin, "regrowth", "place.batch", pending.treeType() + " placed=" + placed + " at " + format(location));
+        plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "place-next delay=" + currentConfig.growthStepTicks());
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 location,
@@ -511,6 +530,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private boolean canWorkAt(Location location, PlantRegrowthConfig currentConfig) {
         World world = location.getWorld();
         if (world == null) {
+            plugin.pathDebug().failure(plugin, "regrowth", "missing-world", "canWorkAt");
             return false;
         }
 
@@ -518,14 +538,20 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         int chunkZ = location.getBlockZ() >> 4;
         int radius = currentConfig.ownedChunkRadius();
         if (!areChunksLoaded(world, chunkX, chunkZ, radius)) {
+            plugin.pathDebug().failure(plugin, "regrowth", "unloaded-chunk", format(location));
             return false;
         }
 
         if (!Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, radius)) {
+            plugin.pathDebug().failure(plugin, "regrowth", "region-ownership", format(location));
             return false;
         }
 
-        return isNearPlayer(location, currentConfig.requiredPlayerDistanceChunks());
+        boolean nearPlayer = isNearPlayer(location, currentConfig.requiredPlayerDistanceChunks());
+        if (!nearPlayer) {
+            plugin.pathDebug().failure(plugin, "regrowth", "player-distance", format(location));
+        }
+        return nearPlayer;
     }
 
     private boolean canInspectDecayBlock(Block block) {

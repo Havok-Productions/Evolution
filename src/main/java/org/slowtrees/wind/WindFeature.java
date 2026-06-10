@@ -32,6 +32,7 @@ public final class WindFeature implements PluginFeature, Listener {
     public WindFeature(SlowTreesPlugin plugin) {
         this.plugin = plugin;
         this.config = WindConfig.load(plugin);
+        plugin.pathDebug().trace(plugin, "wind", "config.load", config.summary());
     }
 
     @Override
@@ -51,6 +52,7 @@ public final class WindFeature implements PluginFeature, Listener {
     @Override
     public void reload() {
         this.config = WindConfig.load(plugin);
+        plugin.pathDebug().trace(plugin, "wind", "config.reload", config.summary());
     }
 
     @Override
@@ -67,6 +69,7 @@ public final class WindFeature implements PluginFeature, Listener {
     }
 
     private void schedulePlayerWind(Player player, long delayTicks) {
+        plugin.pathDebug().traceSampled(plugin, "wind", "scheduler.player-delay", "delay=" + Math.max(1L, delayTicks));
         player.getScheduler().runDelayed(
                 plugin,
                 task -> runNearPlayer(player),
@@ -135,6 +138,7 @@ public final class WindFeature implements PluginFeature, Listener {
             int chunkX = x >> 4;
             int chunkZ = z >> 4;
             if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+                plugin.pathDebug().failure(plugin, "wind", "chunk-or-region-gate", "canopy search chunk " + chunkX + "," + chunkZ);
                 continue;
             }
 
@@ -191,7 +195,7 @@ public final class WindFeature implements PluginFeature, Listener {
         long now = System.currentTimeMillis();
         long nextAttempt = nextLitterAttemptMillis.getOrDefault(player.getUniqueId(), 0L);
         if (now < nextAttempt) {
-            plugin.pathDebug().trace(plugin, "wind", "litter.skip.cooldown", "remaining-ms=" + (nextAttempt - now));
+            plugin.pathDebug().traceSampled(plugin, "wind", "litter.skip.cooldown", "remaining-ms=" + (nextAttempt - now));
             return;
         }
 
@@ -223,12 +227,14 @@ public final class WindFeature implements PluginFeature, Listener {
 
             Block block = target.get();
             if (!isNearPlayer(block.getLocation(), currentConfig.requiredPlayerDistanceChunks())) {
+                plugin.pathDebug().failure(plugin, "wind", "player-distance", format(block));
                 plugin.pathDebug().trace(plugin, "wind", "litter.reject.player-distance", format(block));
                 diagnostics.recordPlayerDistanceReject();
                 diagnostics.recordEvent(currentConfig, "litter-failed: target too far from player at " + format(block));
                 continue;
             }
             if (countLeafLitterInChunk(block) >= currentConfig.maxLeafLitterPerChunk()) {
+                plugin.pathDebug().failure(plugin, "wind", "chunk-cap", format(block));
                 plugin.pathDebug().trace(plugin, "wind", "litter.reject.chunk-cap", format(block));
                 diagnostics.recordChunkCapReject();
                 diagnostics.recordEvent(currentConfig, "litter-failed: chunk cap reached at " + format(block)
@@ -258,6 +264,7 @@ public final class WindFeature implements PluginFeature, Listener {
         int chunkZ = z >> 4;
         if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
             if (recordFailure) {
+                plugin.pathDebug().failure(plugin, "wind", "chunk-or-region-gate", "litter target chunk " + chunkX + "," + chunkZ);
                 diagnostics.recordEvent(currentConfig, "target-failed: chunk not loaded or not region-owned at chunk "
                         + chunkX + "," + chunkZ + " from canopy " + format(canopy));
             }
@@ -315,6 +322,7 @@ public final class WindFeature implements PluginFeature, Listener {
 
         World world = location.getWorld();
         if (world == null) {
+            plugin.pathDebug().failure(plugin, "wind", "missing-world", "player distance check");
             return false;
         }
 

@@ -195,6 +195,19 @@ final class PlantRegrowthConfig {
         return ownedChunkRadius;
     }
 
+    String summary() {
+        return "initial-delay=" + initialDelayTicks
+                + ", growth-step=" + growthStepTicks()
+                + ", blocks-per-step=" + blocksPerGrowthStep
+                + ", world-health=" + worldHealthModeEnabled
+                + ", health-multiplier=" + worldHealthGrowthSpeedMultiplier
+                + ", retry=" + retryDelayTicks
+                + ", player-distance-chunks=" + requiredPlayerDistanceChunks
+                + ", owned-chunk-radius=" + ownedChunkRadius
+                + ", plant-decay=" + plantDecayEnabled
+                + ", decay-delay=" + plantDecayDelayTicks;
+    }
+
     private static Set<String> normalizeWorldNames(Iterable<String> names) {
         Set<String> normalized = new HashSet<>();
         for (String name : names) {

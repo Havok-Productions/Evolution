@@ -46,6 +46,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     public NetherCorruptionFeature(SlowTreesPlugin plugin) {
         this.plugin = plugin;
         this.config = NetherCorruptionConfig.load(plugin);
+        plugin.pathDebug().trace(plugin, "nether", "config.load", config.summary());
     }
 
     @Override
@@ -57,6 +58,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     @Override
     public void onDisable() {
         nextPortalScanMillis.clear();
+        plugin.pathDebug().trace(plugin, "nether", "persistence.save-map-debug.now", "MapDebug.yml");
         mapDebug.saveNow(plugin);
         saveSources();
     }
@@ -64,6 +66,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     @Override
     public void reload() {
         this.config = NetherCorruptionConfig.load(plugin);
+        plugin.pathDebug().trace(plugin, "nether", "config.reload", config.summary());
     }
 
     @Override
@@ -87,6 +90,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         long now = System.currentTimeMillis();
         long nextScan = nextPortalScanMillis.getOrDefault(key, 0L);
         if (now < nextScan) {
+            plugin.pathDebug().traceSampled(plugin, "nether", "portal-scan.skip.cooldown", "remaining-ms=" + (nextScan - now));
             return;
         }
 
@@ -167,11 +171,13 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         World world = source.world();
         if (world == null) {
             plugin.pathDebug().trace(plugin, "nether", "spread.schedule.remove-missing-world", source.shortDescription());
+            plugin.pathDebug().failure(plugin, "nether", "missing-world", source.shortDescription());
             sources.remove(source.key());
             saveSources();
             return;
         }
 
+        plugin.pathDebug().trace(plugin, "nether", "scheduler.region-delay", source.shortDescription() + " delay=" + Math.max(1L, delayTicks));
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 source.center(world),
@@ -190,6 +196,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         World world = source.world();
         if (world == null) {
             plugin.pathDebug().trace(plugin, "nether", "spread.remove.missing-world", source.shortDescription());
+            plugin.pathDebug().failure(plugin, "nether", "missing-world", source.shortDescription());
             sources.remove(source.key());
             saveSources();
             return;
@@ -198,6 +205,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         SourceState state = sourceState(source, world, currentConfig);
         if (state == SourceState.GONE) {
             plugin.pathDebug().trace(plugin, "nether", "spread.remove.portal-gone", source.shortDescription());
+            plugin.pathDebug().failure(plugin, "nether", "missing-portal", source.shortDescription());
             sources.remove(source.key());
             saveSources();
             return;
@@ -240,18 +248,21 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     private SourceState sourceState(PortalSource source, World world, NetherCorruptionConfig currentConfig) {
         if (!areBoundsLoaded(source, world)) {
+            plugin.pathDebug().failure(plugin, "nether", "unloaded-chunk", source.shortDescription());
             return SourceState.WAIT;
         }
 
         for (int chunkX = source.minChunkX(); chunkX <= source.maxChunkX(); chunkX++) {
             for (int chunkZ = source.minChunkZ(); chunkZ <= source.maxChunkZ(); chunkZ++) {
                 if (!Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+                    plugin.pathDebug().failure(plugin, "nether", "region-ownership", "source chunk " + chunkX + "," + chunkZ);
                     return SourceState.WAIT;
                 }
             }
         }
 
         if (!isNearPlayer(source.center(world), currentConfig.requiredPlayerDistanceChunks())) {
+            plugin.pathDebug().failure(plugin, "nether", "player-distance", source.shortDescription());
             return SourceState.WAIT;
         }
 
@@ -280,6 +291,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         int chunkX = x >> 4;
         int chunkZ = z >> 4;
         if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+            plugin.pathDebug().failure(plugin, "nether", "chunk-or-region-gate", "target chunk " + chunkX + "," + chunkZ);
             return Optional.empty();
         }
 
@@ -405,9 +417,11 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     private void loadSources() {
         File file = sourceFile();
         if (!file.exists()) {
+            plugin.pathDebug().trace(plugin, "nether", "persistence.load-missing", "nether-sources.yml");
             return;
         }
 
+        plugin.pathDebug().trace(plugin, "nether", "persistence.load", "nether-sources.yml");
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
         ConfigurationSection sourceSection = yaml.getConfigurationSection("sources");
         if (sourceSection == null) {
@@ -423,14 +437,17 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             try {
                 PortalSource source = PortalSource.from(section);
                 sources.put(source.key(), source);
+                plugin.pathDebug().trace(plugin, "nether", "scheduler.region-delay", "loaded-source spread=" + config.spreadStepTicks());
                 scheduleSpread(source, config.spreadStepTicks());
             } catch (RuntimeException ex) {
+                plugin.pathDebug().failure(plugin, "nether", "persistence-invalid-entry", "nether-sources.yml entry skipped");
                 plugin.getLogger().warning("Skipping invalid Nether corruption source '" + key + "': " + ex.getMessage());
             }
         }
     }
 
     private void saveSources() {
+        plugin.pathDebug().trace(plugin, "nether", "persistence.save", "nether-sources.yml sources=" + sources.size());
         YamlConfiguration yaml = new YamlConfiguration();
         ConfigurationSection sourceSection = yaml.createSection("sources");
         int index = 0;

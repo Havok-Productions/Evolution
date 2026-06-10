@@ -108,4 +108,16 @@ final class WindConfig {
     int debugRecentEvents() {
         return debugRecentEvents;
     }
+
+    String summary() {
+        return "enabled=" + enabled
+                + ", gust-interval=" + gustTickInterval
+                + ", pattern-change=" + patternChangeTicks
+                + ", tree-radius=" + treeSearchRadius
+                + ", player-distance-chunks=" + requiredPlayerDistanceChunks
+                + ", litter-step=" + leafLitterPlacementTicks
+                + ", litter-attempts=" + placementAttempts
+                + ", litter-max-per-chunk=" + maxLeafLitterPerChunk
+                + ", debug-events=" + debugRecentEvents;
+    }
 }

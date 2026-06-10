@@ -97,6 +97,7 @@ final class WindDiagnostics {
         if (now < next || !nextSaveMillis.compareAndSet(next, now + 10000L)) {
             return;
         }
+        plugin.pathDebug().trace(plugin, "wind", "persistence.save-debug.schedule", "debug.yml");
         saveAsync(plugin, config);
     }
 
@@ -105,6 +106,7 @@ final class WindDiagnostics {
             return;
         }
 
+        plugin.pathDebug().trace(plugin, "wind", "scheduler.async-debug-save", "debug.yml");
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             try {
                 save(plugin, config);
@@ -115,6 +117,7 @@ final class WindDiagnostics {
     }
 
     void saveNow(SlowTreesPlugin plugin, WindConfig config) {
+        plugin.pathDebug().trace(plugin, "wind", "persistence.save-debug.now", "debug.yml");
         save(plugin, config);
     }
 

@@ -61,6 +61,7 @@ final class NetherMapDebug {
         if (now < next || !nextSaveMillis.compareAndSet(next, now + 10000L)) {
             return;
         }
+        plugin.pathDebug().trace(plugin, "nether", "persistence.save-map-debug.schedule", "MapDebug.yml");
         saveAsync(plugin);
     }
 
@@ -69,6 +70,7 @@ final class NetherMapDebug {
             return;
         }
 
+        plugin.pathDebug().trace(plugin, "nether", "scheduler.async-debug-save", "MapDebug.yml");
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             try {
                 save(plugin);

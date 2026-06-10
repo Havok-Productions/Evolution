@@ -94,4 +94,17 @@ final class NetherCorruptionConfig {
     int debugMapRadius() {
         return debugMapRadius;
     }
+
+    String summary() {
+        return "enabled=" + enabled
+                + ", spread-step=" + spreadStepTicks
+                + ", blocks-per-step=" + blocksPerStep
+                + ", radius=" + maxRadius
+                + ", vertical-radius=" + verticalRadius
+                + ", attempts=" + attemptsPerStep
+                + ", player-distance-chunks=" + requiredPlayerDistanceChunks
+                + ", portal-scan-radius=" + playerPortalScanRadius
+                + ", debug-events=" + debugRecentEvents
+                + ", debug-map-radius=" + debugMapRadius;
+    }
 }

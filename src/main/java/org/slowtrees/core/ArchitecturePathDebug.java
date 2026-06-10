@@ -21,6 +21,7 @@ import org.bukkit.configuration.file.YamlConfiguration;
 public final class ArchitecturePathDebug {
     private final ConcurrentMap<String, AtomicLong> moduleCounts = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, AtomicLong> pathCounts = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, AtomicLong> failureCounts = new ConcurrentHashMap<>();
     private final AtomicBoolean saveRunning = new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
     private final Deque<String> recentEvents = new ArrayDeque<>();
@@ -44,6 +45,35 @@ public final class ArchitecturePathDebug {
         moduleCounts.computeIfAbsent(module, key -> new AtomicLong()).incrementAndGet();
         pathCounts.computeIfAbsent(module + "." + path, key -> new AtomicLong()).incrementAndGet();
         recordRecent(currentConfig, module, path, detail);
+        saveSoon(plugin, currentConfig);
+    }
+
+    public void traceSampled(SlowTreesPlugin plugin, String module, String path, String detail) {
+        ArchitecturePathDebugConfig currentConfig = config;
+        if (!currentConfig.enabled()) {
+            return;
+        }
+
+        moduleCounts.computeIfAbsent(module, key -> new AtomicLong()).incrementAndGet();
+        long count = pathCounts.computeIfAbsent(module + "." + path, key -> new AtomicLong()).incrementAndGet();
+        if (count <= 5 || Long.bitCount(count) == 1) {
+            recordRecent(currentConfig, module, path, detail + " count=" + count);
+        }
+        saveSoon(plugin, currentConfig);
+    }
+
+    public void failure(SlowTreesPlugin plugin, String module, String reason, String detail) {
+        ArchitecturePathDebugConfig currentConfig = config;
+        if (!currentConfig.enabled()) {
+            return;
+        }
+
+        long failureCount = failureCounts.computeIfAbsent(reason, key -> new AtomicLong()).incrementAndGet();
+        moduleCounts.computeIfAbsent(module, key -> new AtomicLong()).incrementAndGet();
+        pathCounts.computeIfAbsent(module + ".blocked." + reason, key -> new AtomicLong()).incrementAndGet();
+        if (failureCount <= 5 || Long.bitCount(failureCount) == 1) {
+            recordRecent(currentConfig, module, "blocked." + reason, detail + " count=" + failureCount);
+        }
         saveSoon(plugin, currentConfig);
     }
 
@@ -87,6 +117,7 @@ public final class ArchitecturePathDebug {
         yaml.set("save-interval-millis", currentConfig.saveIntervalMillis());
         writeCounts(yaml.createSection("module-counts"), moduleCounts);
         writeCounts(yaml.createSection("path-counts"), pathCounts);
+        writeCounts(yaml.createSection("failure-summary"), failureCounts);
         yaml.set("recent-events", recentEventsSnapshot());
         yaml.set("notes", "This file traces high-level decision paths. Feature-specific files still hold deeper wind/nether maps.");
 

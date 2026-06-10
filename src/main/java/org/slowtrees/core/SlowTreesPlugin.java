@@ -20,6 +20,8 @@ public final class SlowTreesPlugin extends JavaPlugin {
         getConfig().options().copyDefaults(true);
         saveConfig();
         architecturePathDebug = new ArchitecturePathDebug(this);
+        architecturePathDebug.trace(this, "core", "persistence.save-default-config", "config.yml");
+        architecturePathDebug.trace(this, "core", "persistence.save-config", "config.yml defaults merged");
         architecturePathDebug.trace(this, "core", "plugin.enable.start", "default config saved and merged");
         registerFeature(new PlantRegrowthFeature(this));
         registerFeature(new NetherCorruptionFeature(this));
@@ -50,6 +52,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
 
         if (args[0].equalsIgnoreCase("reload")) {
             reloadConfig();
+            pathDebug().trace(this, "core", "persistence.reload-config", "config.yml");
             pathDebug().reload(this);
             features.forEach(PluginFeature::reload);
             pathDebug().trace(this, "core", "command.reload", "features reloaded");
