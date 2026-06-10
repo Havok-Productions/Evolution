@@ -3,11 +3,14 @@ package org.slowtrees.nether;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class NetherSpreadFrontier {
     private final ConcurrentLinkedDeque<Point> points = new ConcurrentLinkedDeque<>();
+    private final Set<Point> uniquePoints = ConcurrentHashMap.newKeySet();
     private final AtomicInteger size = new AtomicInteger();
 
     NetherSpreadFrontier(PortalSource source) {
@@ -15,13 +18,21 @@ final class NetherSpreadFrontier {
     }
 
     void add(int x, int y, int z, int maxSize) {
-        points.addLast(new Point(x, y, z));
+        Point point = new Point(x, y, z);
+        if (!uniquePoints.add(point)) {
+            return;
+        }
+
+        points.addLast(point);
         int currentSize = size.incrementAndGet();
         while (currentSize > maxSize) {
-            if (points.pollFirst() == null) {
+            Point removed = points.pollFirst();
+            if (removed == null) {
                 size.set(0);
+                uniquePoints.clear();
                 return;
             }
+            uniquePoints.remove(removed);
             currentSize = size.decrementAndGet();
         }
     }
@@ -36,6 +47,16 @@ final class NetherSpreadFrontier {
 
     int size() {
         return size.get();
+    }
+
+    int maxHorizontalDistanceFrom(int x, int z) {
+        int maxDistanceSquared = 0;
+        for (Point point : points) {
+            int dx = point.x() - x;
+            int dz = point.z() - z;
+            maxDistanceSquared = Math.max(maxDistanceSquared, (dx * dx) + (dz * dz));
+        }
+        return (int) Math.ceil(Math.sqrt(maxDistanceSquared));
     }
 
     record Point(int x, int y, int z) {

@@ -319,9 +319,10 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     }
 
     private Optional<Block> nearPortalTarget(PortalSource source, World world, NetherCorruptionConfig currentConfig) {
-        int dx = random.nextInt(currentConfig.maxRadius() * 2 + 1) - currentConfig.maxRadius();
-        int dz = random.nextInt(currentConfig.maxRadius() * 2 + 1) - currentConfig.maxRadius();
-        if ((dx * dx) + (dz * dz) > currentConfig.maxRadius() * currentConfig.maxRadius()) {
+        int radius = activeFallbackRadius(source, currentConfig);
+        int dx = random.nextInt(radius * 2 + 1) - radius;
+        int dz = random.nextInt(radius * 2 + 1) - radius;
+        if ((dx * dx) + (dz * dz) > radius * radius) {
             return Optional.empty();
         }
 
@@ -352,6 +353,16 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     private NetherSpreadFrontier frontierFor(PortalSource source) {
         return frontiers.computeIfAbsent(source.key(), key -> new NetherSpreadFrontier(source));
+    }
+
+    private int activeFallbackRadius(PortalSource source, NetherCorruptionConfig currentConfig) {
+        if (!currentConfig.branchingEnabled()) {
+            return currentConfig.maxRadius();
+        }
+
+        int frontierDistance = frontierFor(source).maxHorizontalDistanceFrom(source.centerX(), source.centerZ());
+        int creepingRadius = Math.max(2, frontierDistance + currentConfig.branchRadius());
+        return Math.min(currentConfig.maxRadius(), creepingRadius);
     }
 
     private int distanceSquared(PortalSource source, int x, int z) {
