@@ -331,6 +331,14 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             return false;
         }
 
+        if (isDecayMaterial(block.getType())) {
+            plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-structural-cancel",
+                    block.getType() + " at " + format(block.getLocation()) + " tree=" + active.pending().treeType());
+            schedulePlantDecay(block, currentConfig);
+            cancelRegrowth(active.pending());
+            return true;
+        }
+
         active.unmarkPlaced(blockKey);
         activeBlockKeys.remove(blockKey);
         active.requeueFirst(block.getState());
