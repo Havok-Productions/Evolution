@@ -94,6 +94,15 @@ nether-corruption:
   attempts-per-step: 96
   required-player-distance-chunks: 8
   player-portal-scan-radius: 32
+  testing:
+    enabled: true
+    spread-step-ticks: 40
+    blocks-per-step: 4
+  branching:
+    enabled: true
+    branch-chance-percent: 85
+    branch-radius: 4
+    max-frontier-size: 512
   debug:
     recent-events: 40
     map-radius: 24

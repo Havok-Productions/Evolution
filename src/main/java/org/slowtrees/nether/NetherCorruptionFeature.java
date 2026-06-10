@@ -36,6 +36,7 @@ import org.slowtrees.core.SlowTreesPlugin;
 public final class NetherCorruptionFeature implements PluginFeature, Listener {
     private final SlowTreesPlugin plugin;
     private final ConcurrentMap<String, PortalSource> sources = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, NetherSpreadFrontier> frontiers = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> nextPortalScanMillis = new ConcurrentHashMap<>();
     private final NetherTerrainMimic terrainMimic = new NetherTerrainMimic();
     private final NetherMapDebug mapDebug = new NetherMapDebug();
@@ -158,6 +159,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     private void queueSource(PortalSource source, NetherCorruptionConfig currentConfig) {
         PortalSource previous = sources.putIfAbsent(source.key(), source);
         if (previous == null) {
+            frontierFor(source);
             saveSources();
             plugin.getLogger().info("Tracking Nether corruption source at " + source.shortDescription() + ".");
             plugin.pathDebug().trace(plugin, "nether", "source.queue.new", source.shortDescription());
@@ -173,6 +175,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             plugin.pathDebug().trace(plugin, "nether", "spread.schedule.remove-missing-world", source.shortDescription());
             plugin.pathDebug().failure(plugin, "nether", "missing-world", source.shortDescription());
             sources.remove(source.key());
+            frontiers.remove(source.key());
             saveSources();
             return;
         }
@@ -198,6 +201,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             plugin.pathDebug().trace(plugin, "nether", "spread.remove.missing-world", source.shortDescription());
             plugin.pathDebug().failure(plugin, "nether", "missing-world", source.shortDescription());
             sources.remove(source.key());
+            frontiers.remove(source.key());
             saveSources();
             return;
         }
@@ -207,6 +211,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             plugin.pathDebug().trace(plugin, "nether", "spread.remove.portal-gone", source.shortDescription());
             plugin.pathDebug().failure(plugin, "nether", "missing-portal", source.shortDescription());
             sources.remove(source.key());
+            frontiers.remove(source.key());
             saveSources();
             return;
         }
@@ -217,10 +222,11 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         }
 
         plugin.pathDebug().trace(plugin, "nether", "spread.active", source.shortDescription()
-                + " attempts=" + currentConfig.attemptsPerStep());
+                + " attempts=" + currentConfig.attemptsPerStep()
+                + " frontier=" + frontierFor(source).size());
         int changed = 0;
         for (int attempt = 0; attempt < currentConfig.attemptsPerStep() && changed < currentConfig.blocksPerStep(); attempt++) {
-            Optional<Block> target = randomTarget(source, world, currentConfig);
+            Optional<Block> target = nextTarget(source, world, currentConfig);
             if (target.isEmpty()) {
                 continue;
             }
@@ -230,6 +236,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             NetherMimicResult mimic = terrainMimic.mimic(block, source, random);
             if (mimic != null && mimic.material() != original) {
                 block.setType(mimic.material(), false);
+                frontierFor(source).add(block.getX(), block.getY(), block.getZ(), currentConfig.maxFrontierSize());
                 plugin.pathDebug().trace(plugin, "nether", "spread.replace", format(block)
                         + " " + original + "->" + mimic.material()
                         + " style=" + mimic.style().displayName());
@@ -279,7 +286,39 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         return SourceState.GONE;
     }
 
-    private Optional<Block> randomTarget(PortalSource source, World world, NetherCorruptionConfig currentConfig) {
+    private Optional<Block> nextTarget(PortalSource source, World world, NetherCorruptionConfig currentConfig) {
+        if (currentConfig.branchingEnabled() && random.nextInt(100) < currentConfig.branchChancePercent()) {
+            Optional<Block> branched = branchTarget(source, world, currentConfig);
+            if (branched.isPresent()) {
+                return branched;
+            }
+        }
+        return nearPortalTarget(source, world, currentConfig);
+    }
+
+    private Optional<Block> branchTarget(PortalSource source, World world, NetherCorruptionConfig currentConfig) {
+        NetherSpreadFrontier.Point point = frontierFor(source).randomPoint(random);
+        if (point == null) {
+            return Optional.empty();
+        }
+
+        int branchRadius = currentConfig.branchRadius();
+        int dx = random.nextInt(branchRadius * 2 + 1) - branchRadius;
+        int dz = random.nextInt(branchRadius * 2 + 1) - branchRadius;
+        if (dx == 0 && dz == 0) {
+            dx = random.nextBoolean() ? 1 : -1;
+        }
+
+        int x = point.x() + dx;
+        int z = point.z() + dz;
+        if (distanceSquared(source, x, z) > currentConfig.maxRadius() * currentConfig.maxRadius()) {
+            return Optional.empty();
+        }
+
+        return mimicableTargetAt(source, world, currentConfig, x, point.y(), z, "branch");
+    }
+
+    private Optional<Block> nearPortalTarget(PortalSource source, World world, NetherCorruptionConfig currentConfig) {
         int dx = random.nextInt(currentConfig.maxRadius() * 2 + 1) - currentConfig.maxRadius();
         int dz = random.nextInt(currentConfig.maxRadius() * 2 + 1) - currentConfig.maxRadius();
         if ((dx * dx) + (dz * dz) > currentConfig.maxRadius() * currentConfig.maxRadius()) {
@@ -288,15 +327,19 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
         int x = source.centerX() + dx;
         int z = source.centerZ() + dz;
+        return mimicableTargetAt(source, world, currentConfig, x, source.centerY(), z, "portal-random");
+    }
+
+    private Optional<Block> mimicableTargetAt(PortalSource source, World world, NetherCorruptionConfig currentConfig, int x, int centerY, int z, String mode) {
         int chunkX = x >> 4;
         int chunkZ = z >> 4;
         if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
-            plugin.pathDebug().failure(plugin, "nether", "chunk-or-region-gate", "target chunk " + chunkX + "," + chunkZ);
+            plugin.pathDebug().failure(plugin, "nether", "chunk-or-region-gate", mode + " target chunk " + chunkX + "," + chunkZ);
             return Optional.empty();
         }
 
-        int startY = Math.min(world.getMaxHeight() - 1, source.centerY() + currentConfig.verticalRadius());
-        int endY = Math.max(world.getMinHeight(), source.centerY() - currentConfig.verticalRadius());
+        int startY = Math.min(world.getMaxHeight() - 1, centerY + currentConfig.verticalRadius());
+        int endY = Math.max(world.getMinHeight(), centerY - currentConfig.verticalRadius());
         for (int y = startY; y >= endY; y--) {
             Block block = world.getBlockAt(x, y, z);
             if (terrainMimic.canMimic(block.getType())) {
@@ -305,6 +348,16 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         }
 
         return Optional.empty();
+    }
+
+    private NetherSpreadFrontier frontierFor(PortalSource source) {
+        return frontiers.computeIfAbsent(source.key(), key -> new NetherSpreadFrontier(source));
+    }
+
+    private int distanceSquared(PortalSource source, int x, int z) {
+        int dx = x - source.centerX();
+        int dz = z - source.centerZ();
+        return (dx * dx) + (dz * dz);
     }
 
     private List<Block> findConnectedPortalBlocks(Block start) {
@@ -437,6 +490,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             try {
                 PortalSource source = PortalSource.from(section);
                 sources.put(source.key(), source);
+                frontierFor(source);
                 plugin.pathDebug().trace(plugin, "nether", "scheduler.region-delay", "loaded-source spread=" + config.spreadStepTicks());
                 scheduleSpread(source, config.spreadStepTicks());
             } catch (RuntimeException ex) {
