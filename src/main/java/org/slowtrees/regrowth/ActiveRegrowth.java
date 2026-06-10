@@ -35,6 +35,10 @@ final class ActiveRegrowth {
         return plannedBlocks.isEmpty();
     }
 
+    synchronized int remainingBlockCount() {
+        return plannedBlocks.size();
+    }
+
     synchronized void markPlaced(String blockKey) {
         placedBlockKeys.add(blockKey);
     }
@@ -45,6 +49,10 @@ final class ActiveRegrowth {
 
     synchronized Set<String> placedBlockKeysSnapshot() {
         return new HashSet<>(placedBlockKeys);
+    }
+
+    synchronized int placedBlockCount() {
+        return placedBlockKeys.size();
     }
 
     void resetCooldown(long ticks) {

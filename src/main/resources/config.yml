@@ -46,7 +46,7 @@ disabled-worlds: []
 architecture-pathfinding:
   debug:
     enabled: true
-    recent-events: 160
+    recent-events: 500
     save-interval-millis: 10000
 
 # Materials that slow regrowth may replace. Solid player blocks are intentionally

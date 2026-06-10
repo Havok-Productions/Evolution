@@ -92,13 +92,27 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             return;
         }
 
-        plugin.pathDebug().trace(plugin, "regrowth", "break.inspect", block.getType() + " at " + format(block.getLocation()));
         String brokenBlockKey = PendingRegrowth.keyFor(block);
+        String activeKey = activeBlockKeys.get(brokenBlockKey);
+        PendingRegrowth activePending = activeKey == null ? null : pendingRegrowth.get(activeKey);
+        plugin.pathDebug().trace(plugin, "regrowth", "break.inspect", block.getType() + " at " + format(block.getLocation()));
+        plugin.pathDebug().trace(plugin, "regrowth", "break.inspect-detail",
+                "key=" + brokenBlockKey
+                        + " active-key=" + valueOrNone(activeKey)
+                        + " active-pending=" + formatOrNone(activePending)
+                        + " anchored-pending=" + pendingRegrowth.containsKey(brokenBlockKey)
+                        + " pending-count=" + pendingRegrowth.size()
+                        + " active-count=" + activeRegrowth.size());
         PendingRegrowth anchoredPending = pendingRegrowth.get(brokenBlockKey);
         if (anchoredPending != null && block.getType() == anchoredPending.anchorMaterial()) {
             plugin.pathDebug().trace(plugin, "regrowth", "break.anchor-cancel", block.getType() + " at " + format(block.getLocation()));
             schedulePlantDecay(block, currentConfig);
             cancelRegrowth(anchoredPending);
+            return;
+        }
+
+        if (interruptActiveRegrowth(block, currentConfig)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-active", block.getType() + " at " + format(block.getLocation()));
             return;
         }
 
@@ -110,11 +124,6 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             }
             plugin.pathDebug().trace(plugin, "regrowth", "break.lowest-support-suppress-regrowth",
                     "no queue created for cut support at " + format(block.getLocation()));
-            return;
-        }
-
-        if (interruptActiveRegrowth(block, currentConfig)) {
-            plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-active", block.getType() + " at " + format(block.getLocation()));
             return;
         }
 
@@ -327,10 +336,16 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
         ActiveRegrowth active = activeRegrowth.get(regrowthKey);
         if (active == null) {
+            plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-stale-active-key",
+                    block.getType() + " at " + format(block.getLocation()) + " key=" + regrowthKey);
             activeBlockKeys.remove(blockKey);
             return false;
         }
 
+        plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-active-detail",
+                block.getType() + " at " + format(block.getLocation())
+                        + " active=" + activeSummary(active)
+                        + " structural=" + isDecayMaterial(block.getType()));
         if (isDecayMaterial(block.getType())) {
             plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-structural-cancel",
                     block.getType() + " at " + format(block.getLocation()) + " tree=" + active.pending().treeType());
@@ -343,6 +358,8 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         activeBlockKeys.remove(blockKey);
         active.requeueFirst(block.getState());
         active.resetCooldown(currentConfig.growthStepTicks());
+        plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-soft-requeue",
+                block.getType() + " at " + format(block.getLocation()) + " active=" + activeSummary(active));
         return true;
     }
 
@@ -555,11 +572,24 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         int placed = 0;
         while (placed < currentConfig.blocksPerGrowthStep() && !active.isFinished()) {
             BlockState state = active.pollNextBlock();
-            if (state != null && canPlace(state, currentConfig)) {
-                state.update(true, false);
-                markPlaced(active, state);
-                placed++;
+            if (state == null) {
+                continue;
             }
+            if (!canPlace(state, currentConfig)) {
+                Block blocked = state.getBlock();
+                plugin.pathDebug().trace(plugin, "regrowth", "place.skip-blocked",
+                        "planned=" + state.getType()
+                                + " target=" + format(blocked.getLocation())
+                                + " current=" + blocked.getType()
+                                + " pending=" + format(pending));
+                continue;
+            }
+
+            state.update(true, false);
+            markPlaced(active, state);
+            plugin.pathDebug().trace(plugin, "regrowth", "place.block",
+                    state.getType() + " at " + format(state.getLocation()) + " pending=" + format(pending));
+            placed++;
         }
 
         if (active.isFinished()) {
@@ -834,5 +864,23 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     private static String format(PendingRegrowth pending) {
         return pending.x() + "," + pending.y() + "," + pending.z();
+    }
+
+    private static String formatOrNone(PendingRegrowth pending) {
+        return pending == null ? "none" : pending.treeType() + "@" + format(pending);
+    }
+
+    private static String valueOrNone(String value) {
+        return value == null ? "none" : value;
+    }
+
+    private static String activeSummary(ActiveRegrowth active) {
+        return active.pending().treeType()
+                + "@"
+                + format(active.pending())
+                + " placed="
+                + active.placedBlockCount()
+                + " remaining="
+                + active.remainingBlockCount();
     }
 }
