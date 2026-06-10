@@ -71,6 +71,18 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
                 + activeDecay.size() + " decaying plant(s).";
     }
 
+    public int queuedRegrowthCount() {
+        return pendingRegrowth.size();
+    }
+
+    public int activeRegrowthCount() {
+        return activeRegrowth.size();
+    }
+
+    public int activeDecayCount() {
+        return activeDecay.size();
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         Block block = event.getBlock();

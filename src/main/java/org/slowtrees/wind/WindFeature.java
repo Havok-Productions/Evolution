@@ -63,6 +63,30 @@ public final class WindFeature implements PluginFeature, Listener {
                 + ", leaf litter placed: " + diagnostics.litterPlaced() + ".";
     }
 
+    public boolean enabled() {
+        return config.enabled();
+    }
+
+    public long leafParticlesSpawned() {
+        return diagnostics.leafParticlesSpawned();
+    }
+
+    public long leafLitterPlaced() {
+        return diagnostics.litterPlaced();
+    }
+
+    public double currentWindX() {
+        return pattern.x();
+    }
+
+    public double currentWindZ() {
+        return pattern.z();
+    }
+
+    public double currentWindStrength() {
+        return pattern.strength();
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
         schedulePlayerWind(event.getPlayer(), 20L);

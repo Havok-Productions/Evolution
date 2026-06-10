@@ -76,6 +76,47 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
                 + " portal source(s), changed " + changedBlocks.get() + " block(s) since reload.";
     }
 
+    public boolean enabled() {
+        return config.enabled();
+    }
+
+    public int trackedSourceCount() {
+        return sources.size();
+    }
+
+    public long changedBlockCount() {
+        return changedBlocks.get();
+    }
+
+    public boolean isMimicable(Material material) {
+        return terrainMimic.canMimic(material);
+    }
+
+    public boolean isCorruptionMaterial(Material material) {
+        return terrainMimic.isCorruptionMaterial(material);
+    }
+
+    public boolean registerPortalSourceNear(Location location, int radius) {
+        NetherCorruptionConfig currentConfig = config;
+        World world = location.getWorld();
+        if (!currentConfig.enabled() || world == null || world.getEnvironment() != World.Environment.NORMAL) {
+            return false;
+        }
+
+        Optional<Block> portal = findNearbyPortalBlock(location, radius);
+        if (portal.isEmpty()) {
+            return false;
+        }
+
+        List<Block> portalBlocks = findConnectedPortalBlocks(portal.get());
+        if (portalBlocks.isEmpty()) {
+            return false;
+        }
+
+        queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
+        return true;
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerMove(PlayerMoveEvent event) {
         NetherCorruptionConfig currentConfig = config;

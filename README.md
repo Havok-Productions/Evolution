@@ -52,6 +52,24 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 - `/slowtrees reload` reloads `config.yml`.
 - `/slowtrees pending` shows the number of queued regrowth jobs.
 
+## API
+
+Other plugins can read SlowTrees state through `org.slowtrees.api.SlowTreesProvider` while SlowTrees is enabled.
+
+```java
+SlowTreesApi api = SlowTreesProvider.get();
+int queued = api.regrowth().queuedCount();
+boolean tracked = api.nether().registerPortalSourceNear(location, 32);
+WindSnapshot wind = api.wind().currentPattern();
+```
+
+The first API surface is intentionally small and stable:
+
+- Core: version, status lines, and reload.
+- Regrowth: queued, active, and decaying counts.
+- Nether corruption: source counts, changed block count, material checks, and existing-portal registration.
+- Wind: enabled state, particle/litter counters, and current wind pattern.
+
 ## Permissions
 
 - `slowtrees.admin` allows admin commands.
