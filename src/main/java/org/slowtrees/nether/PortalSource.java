@@ -87,7 +87,7 @@ final class PortalSource {
     }
 
     String shortDescription() {
-        return "world " + worldId + " near " + centerX() + "," + centerY() + "," + centerZ();
+        return "near " + centerX() + "," + centerY() + "," + centerZ();
     }
 
     int minChunkX() {

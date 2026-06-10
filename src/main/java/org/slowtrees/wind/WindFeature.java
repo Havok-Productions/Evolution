@@ -36,6 +36,7 @@ public final class WindFeature implements PluginFeature, Listener {
 
     @Override
     public void onEnable() {
+        plugin.pathDebug().trace(plugin, "wind", "enable.schedule-online-players", "players=" + Bukkit.getOnlinePlayers().size());
         for (Player player : Bukkit.getOnlinePlayers()) {
             schedulePlayerWind(player, 1L);
         }
@@ -77,10 +78,12 @@ public final class WindFeature implements PluginFeature, Listener {
     private void runNearPlayer(Player player) {
         WindConfig currentConfig = config;
         if (!player.isOnline()) {
+            plugin.pathDebug().trace(plugin, "wind", "tick.skip.offline-player", "player no longer online");
             return;
         }
 
         if (!currentConfig.enabled()) {
+            plugin.pathDebug().trace(plugin, "wind", "tick.skip.disabled", "gust interval=" + currentConfig.gustTickInterval());
             schedulePlayerWind(player, currentConfig.gustTickInterval());
             return;
         }
@@ -89,14 +92,18 @@ public final class WindFeature implements PluginFeature, Listener {
         Location playerLocation = player.getLocation();
         World world = playerLocation.getWorld();
         if (world == null) {
+            plugin.pathDebug().trace(plugin, "wind", "tick.skip.no-world", "player has no world");
             diagnostics.recordEvent(currentConfig, "wind-skip: player has no world");
         } else if (world.getEnvironment() == World.Environment.NORMAL) {
             Optional<Block> canopy = findNearbyCanopy(playerLocation, currentConfig.treeSearchRadius());
+            plugin.pathDebug().trace(plugin, "wind", canopy.isPresent() ? "canopy.search.found" : "canopy.search.miss",
+                    "near=" + format(playerLocation) + " radius=" + currentConfig.treeSearchRadius());
             canopy.ifPresent(block -> {
                 spawnLeafDrift(player, block, currentPattern, currentConfig);
                 maybePlaceLeafLitter(player, block, currentPattern, currentConfig);
             });
         } else {
+            plugin.pathDebug().trace(plugin, "wind", "tick.skip.environment", world.getEnvironment().name());
             diagnostics.recordEvent(currentConfig, "wind-skip: world environment is " + world.getEnvironment());
         }
 
@@ -108,6 +115,7 @@ public final class WindFeature implements PluginFeature, Listener {
         if (current.expired()) {
             current = WindPattern.next(random, currentConfig.patternChangeTicks());
             pattern = current;
+            plugin.pathDebug().trace(plugin, "wind", "pattern.change", "strength=" + current.strength());
         }
         return current;
     }
@@ -175,6 +183,7 @@ public final class WindFeature implements PluginFeature, Listener {
 
     private void maybePlaceLeafLitter(Player player, Block canopy, WindPattern currentPattern, WindConfig currentConfig) {
         if (currentConfig.maxLeafLitterPerChunk() <= 0) {
+            plugin.pathDebug().trace(plugin, "wind", "litter.skip.chunk-cap-zero", format(canopy));
             diagnostics.recordEvent(currentConfig, "litter-skip: max-per-chunk is 0 at " + format(canopy));
             return;
         }
@@ -182,6 +191,7 @@ public final class WindFeature implements PluginFeature, Listener {
         long now = System.currentTimeMillis();
         long nextAttempt = nextLitterAttemptMillis.getOrDefault(player.getUniqueId(), 0L);
         if (now < nextAttempt) {
+            plugin.pathDebug().trace(plugin, "wind", "litter.skip.cooldown", "remaining-ms=" + (nextAttempt - now));
             return;
         }
 
@@ -196,6 +206,7 @@ public final class WindFeature implements PluginFeature, Listener {
                 + " drift-radius=" + driftRadius
                 + " attempts=" + currentConfig.placementAttempts());
         if (rain && !storm && random.nextInt(100) < 25) {
+            plugin.pathDebug().trace(plugin, "wind", "litter.skip.rain-roll", format(canopy));
             diagnostics.recordRainSkip();
             diagnostics.recordEvent(currentConfig, "litter-skip: rain settling roll skipped at " + format(canopy));
             diagnostics.saveSoon(plugin, currentConfig);
@@ -212,17 +223,20 @@ public final class WindFeature implements PluginFeature, Listener {
 
             Block block = target.get();
             if (!isNearPlayer(block.getLocation(), currentConfig.requiredPlayerDistanceChunks())) {
+                plugin.pathDebug().trace(plugin, "wind", "litter.reject.player-distance", format(block));
                 diagnostics.recordPlayerDistanceReject();
                 diagnostics.recordEvent(currentConfig, "litter-failed: target too far from player at " + format(block));
                 continue;
             }
             if (countLeafLitterInChunk(block) >= currentConfig.maxLeafLitterPerChunk()) {
+                plugin.pathDebug().trace(plugin, "wind", "litter.reject.chunk-cap", format(block));
                 diagnostics.recordChunkCapReject();
                 diagnostics.recordEvent(currentConfig, "litter-failed: chunk cap reached at " + format(block)
                         + " max=" + currentConfig.maxLeafLitterPerChunk());
                 continue;
             }
             block.setType(Material.LEAF_LITTER, false);
+            plugin.pathDebug().trace(plugin, "wind", "litter.place", format(block) + " below=" + block.getRelative(0, -1, 0).getType());
             diagnostics.recordLitterPlaced();
             diagnostics.recordEvent(currentConfig, "litter-placed: target=" + format(block)
                     + " below=" + block.getRelative(0, -1, 0).getType());
@@ -230,6 +244,7 @@ public final class WindFeature implements PluginFeature, Listener {
             return;
         }
         diagnostics.recordEvent(currentConfig, "litter-failed: all attempts rejected near canopy " + format(canopy));
+        plugin.pathDebug().trace(plugin, "wind", "litter.fail.all-attempts", format(canopy));
         diagnostics.saveSoon(plugin, currentConfig);
     }
 

@@ -41,6 +41,14 @@ owned-chunk-radius: 1
 enabled-worlds: []
 disabled-worlds: []
 
+# Writes a high-level trace of how the plugin moves through its own decision
+# paths. Use this when a feature is "doing something" but the why is unclear.
+architecture-pathfinding:
+  debug:
+    enabled: true
+    recent-events: 160
+    save-interval-millis: 10000
+
 # Materials that slow regrowth may replace. Solid player blocks are intentionally
 # not listed, so queued trees wait instead of eating builds.
 replaceable-materials:

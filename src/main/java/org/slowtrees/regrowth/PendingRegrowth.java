@@ -78,6 +78,18 @@ final class PendingRegrowth {
         return treeType;
     }
 
+    int x() {
+        return x;
+    }
+
+    int y() {
+        return y;
+    }
+
+    int z() {
+        return z;
+    }
+
     Material anchorMaterial() {
         return anchorMaterial;
     }

@@ -50,6 +50,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     @Override
     public void onEnable() {
+        plugin.pathDebug().trace(plugin, "nether", "enable.load-sources", "loading stored portal sources");
         loadSources();
     }
 
@@ -77,6 +78,8 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         Location location = event.getTo();
         World world = location.getWorld();
         if (!currentConfig.enabled() || world == null || world.getEnvironment() != World.Environment.NORMAL) {
+            plugin.pathDebug().trace(plugin, "nether", "portal-scan.skip", "enabled=" + currentConfig.enabled()
+                    + " world=" + (world == null ? "none" : world.getEnvironment()));
             return;
         }
 
@@ -88,8 +91,10 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         }
 
         nextPortalScanMillis.put(key, now + 5000L);
+        plugin.pathDebug().trace(plugin, "nether", "portal-scan.start", "radius=" + currentConfig.playerPortalScanRadius());
         findNearbyPortalBlock(location, currentConfig.playerPortalScanRadius()).ifPresent(block -> {
             List<Block> portalBlocks = findConnectedPortalBlocks(block);
+            plugin.pathDebug().trace(plugin, "nether", "portal-scan.portal-found", "blocks=" + portalBlocks.size() + " at " + format(block));
             if (!portalBlocks.isEmpty()) {
                 queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
             }
@@ -151,13 +156,17 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         if (previous == null) {
             saveSources();
             plugin.getLogger().info("Tracking Nether corruption source at " + source.shortDescription() + ".");
+            plugin.pathDebug().trace(plugin, "nether", "source.queue.new", source.shortDescription());
             scheduleSpread(source, Math.min(20L, currentConfig.spreadStepTicks()));
+        } else {
+            plugin.pathDebug().trace(plugin, "nether", "source.queue.existing", source.shortDescription());
         }
     }
 
     private void scheduleSpread(PortalSource source, long delayTicks) {
         World world = source.world();
         if (world == null) {
+            plugin.pathDebug().trace(plugin, "nether", "spread.schedule.remove-missing-world", source.shortDescription());
             sources.remove(source.key());
             saveSources();
             return;
@@ -174,11 +183,13 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     private void spreadFrom(PortalSource source) {
         NetherCorruptionConfig currentConfig = config;
         if (!currentConfig.enabled() || !sources.containsKey(source.key())) {
+            plugin.pathDebug().trace(plugin, "nether", "spread.skip.disabled-or-untracked", source.shortDescription());
             return;
         }
 
         World world = source.world();
         if (world == null) {
+            plugin.pathDebug().trace(plugin, "nether", "spread.remove.missing-world", source.shortDescription());
             sources.remove(source.key());
             saveSources();
             return;
@@ -186,15 +197,19 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
         SourceState state = sourceState(source, world, currentConfig);
         if (state == SourceState.GONE) {
+            plugin.pathDebug().trace(plugin, "nether", "spread.remove.portal-gone", source.shortDescription());
             sources.remove(source.key());
             saveSources();
             return;
         }
         if (state == SourceState.WAIT) {
+            plugin.pathDebug().trace(plugin, "nether", "spread.wait", source.shortDescription());
             scheduleSpread(source, currentConfig.spreadStepTicks());
             return;
         }
 
+        plugin.pathDebug().trace(plugin, "nether", "spread.active", source.shortDescription()
+                + " attempts=" + currentConfig.attemptsPerStep());
         int changed = 0;
         for (int attempt = 0; attempt < currentConfig.attemptsPerStep() && changed < currentConfig.blocksPerStep(); attempt++) {
             Optional<Block> target = randomTarget(source, world, currentConfig);
@@ -207,12 +222,17 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             NetherMimicResult mimic = terrainMimic.mimic(block, source, random);
             if (mimic != null && mimic.material() != original) {
                 block.setType(mimic.material(), false);
+                plugin.pathDebug().trace(plugin, "nether", "spread.replace", format(block)
+                        + " " + original + "->" + mimic.material()
+                        + " style=" + mimic.style().displayName());
                 mapDebug.recordReplacement(plugin, currentConfig, source, block, original, mimic, terrainMimic);
                 changed++;
             }
         }
         if (changed > 0) {
             changedBlocks.addAndGet(changed);
+        } else {
+            plugin.pathDebug().trace(plugin, "nether", "spread.no-change", source.shortDescription());
         }
 
         scheduleSpread(source, currentConfig.spreadStepTicks());
@@ -438,6 +458,10 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     private String blockKey(Block block) {
         return block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
+    }
+
+    private String format(Block block) {
+        return block.getWorld().getName() + " " + block.getX() + "," + block.getY() + "," + block.getZ();
     }
 
     private enum SourceState {

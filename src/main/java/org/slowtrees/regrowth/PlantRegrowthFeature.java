@@ -47,6 +47,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     @Override
     public void onEnable() {
+        plugin.pathDebug().trace(plugin, "regrowth", "enable.load-queue", "loading queued plant regrowth");
         loadQueuedRegrowth();
     }
 
@@ -73,30 +74,37 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         Block block = event.getBlock();
         PlantRegrowthConfig currentConfig = config;
         if (!currentConfig.isWorldAllowed(block.getWorld())) {
+            plugin.pathDebug().trace(plugin, "regrowth", "break.skip.world-disabled", format(block.getLocation()));
             return;
         }
 
+        plugin.pathDebug().trace(plugin, "regrowth", "break.inspect", block.getType() + " at " + format(block.getLocation()));
         String brokenBlockKey = PendingRegrowth.keyFor(block);
         PendingRegrowth anchoredPending = pendingRegrowth.get(brokenBlockKey);
         if (anchoredPending != null && block.getType() == anchoredPending.anchorMaterial()) {
+            plugin.pathDebug().trace(plugin, "regrowth", "break.anchor-cancel", block.getType() + " at " + format(block.getLocation()));
             schedulePlantDecay(block, currentConfig);
             cancelRegrowth(anchoredPending);
             return;
         }
 
         if (interruptActiveRegrowth(block, currentConfig)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-active", block.getType() + " at " + format(block.getLocation()));
             return;
         }
 
         Optional<TreeType> treeType = currentConfig.treeTypeFor(block.getType());
         if (treeType.isEmpty()) {
             Optional<PendingRegrowth> pendingMushroom = createPendingMushroom(block, currentConfig);
+            plugin.pathDebug().trace(plugin, "regrowth", pendingMushroom.isPresent() ? "break.mushroom-queue" : "break.ignore-not-plant",
+                    block.getType() + " at " + format(block.getLocation()));
             pendingMushroom.ifPresent(pending -> queueRegrowth(pending, currentConfig));
             return;
         }
 
         Block baseBlock = findBaseOfSameType(block);
         if (isSameBlock(block, baseBlock)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "break.lowest-anchor", block.getType() + " at " + format(block.getLocation()));
             schedulePlantDecay(baseBlock, currentConfig);
             cancelAnchoredRegrowth(baseBlock);
             return;
@@ -119,6 +127,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private void queueRegrowth(PendingRegrowth pending, PlantRegrowthConfig currentConfig) {
         PendingRegrowth previous = pendingRegrowth.putIfAbsent(pending.key(), pending);
         if (previous == null) {
+            plugin.pathDebug().trace(plugin, "regrowth", "queue.new", pending.treeType() + " at " + format(pending));
             saveQueuedRegrowth();
             scheduleAttempt(pending, currentConfig.initialDelayTicks());
             return;
@@ -126,6 +135,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
         ActiveRegrowth active = activeRegrowth.get(previous.key());
         if (active != null) {
+            plugin.pathDebug().trace(plugin, "regrowth", "queue.active-reset-cooldown", previous.treeType().name());
             active.resetCooldown(currentConfig.growthStepTicks());
         }
     }
@@ -145,21 +155,25 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     private void schedulePlantDecay(Block baseBlock, PlantRegrowthConfig currentConfig) {
         if (!currentConfig.plantDecayEnabled() || !isDecayMaterial(baseBlock.getType())) {
+            plugin.pathDebug().trace(plugin, "regrowth", "decay.skip-disabled-or-invalid", baseBlock.getType() + " at " + format(baseBlock.getLocation()));
             return;
         }
 
         Deque<PlantDecayPlan.DecayBlock> blocks = collectDecayBlocks(baseBlock, currentConfig.plantDecayMaxBlocks());
         if (blocks.isEmpty()) {
+            plugin.pathDebug().trace(plugin, "regrowth", "decay.skip-empty", baseBlock.getType() + " at " + format(baseBlock.getLocation()));
             return;
         }
 
         String key = PendingRegrowth.keyFor(baseBlock);
         PlantDecayPlan plan = new PlantDecayPlan(baseBlock.getType(), blocks);
         if (activeDecay.putIfAbsent(key, plan) != null) {
+            plugin.pathDebug().trace(plugin, "regrowth", "decay.skip-already-active", format(baseBlock.getLocation()));
             return;
         }
 
         Location location = baseBlock.getLocation();
+        plugin.pathDebug().trace(plugin, "regrowth", "decay.schedule", "blocks=" + blocks.size() + " at " + format(location));
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 location,
@@ -201,11 +215,13 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         PlantRegrowthConfig currentConfig = config;
         World world = location.getWorld();
         if (world == null || !currentConfig.plantDecayEnabled()) {
+            plugin.pathDebug().trace(plugin, "regrowth", "decay.cancel", "world missing or disabled");
             activeDecay.remove(key, plan);
             return;
         }
 
         if (!canWorkAt(location, currentConfig)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "decay.wait", format(location));
             schedulePlantDecayStep(key, location, plan, currentConfig.retryDelayTicks());
             return;
         }
@@ -225,11 +241,13 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             plan.removeNext();
             if (block.getType() == plan.originalMaterial()) {
                 block.setType(Material.AIR, false);
+                plugin.pathDebug().trace(plugin, "regrowth", "decay.remove-block", format(block.getLocation()));
                 removed++;
             }
         }
 
         if (plan.isFinished()) {
+            plugin.pathDebug().trace(plugin, "regrowth", "decay.done", format(location));
             activeDecay.remove(key, plan);
             return;
         }
@@ -352,6 +370,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private void scheduleAttempt(PendingRegrowth pending, long delayTicks) {
         World world = pending.world();
         if (world == null) {
+            plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-missing-world", pending.treeType().name());
             removeRegrowth(pending);
             return;
         }
@@ -368,29 +387,34 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         PlantRegrowthConfig currentConfig = config;
         World world = pending.world();
         if (world == null || !currentConfig.isWorldAllowed(world)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-world-disabled", pending.treeType().name());
             removeRegrowth(pending);
             return;
         }
 
         Location location = pending.location(world);
         if (!canWorkAt(location, currentConfig)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "attempt.wait-cannot-work", format(location));
             retryLater(pending);
             return;
         }
 
         if (!hasAnchorBlock(location, pending)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-missing-anchor", format(location));
             removeRegrowth(pending);
             return;
         }
 
         Deque<BlockState> plannedBlocks = planStructure(location, pending.treeType(), pending.seed(), currentConfig);
         if (plannedBlocks.isEmpty()) {
+            plugin.pathDebug().trace(plugin, "regrowth", "attempt.retry-empty-plan", pending.treeType() + " at " + format(location));
             retryLater(pending);
             return;
         }
 
         ActiveRegrowth active = new ActiveRegrowth(pending, plannedBlocks);
         activeRegrowth.put(pending.key(), active);
+        plugin.pathDebug().trace(plugin, "regrowth", "attempt.active-start", pending.treeType() + " blocks=" + plannedBlocks.size());
         placeNextBatch(active);
     }
 
@@ -458,10 +482,12 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         }
 
         if (active.isFinished()) {
+            plugin.pathDebug().trace(plugin, "regrowth", "place.done", pending.treeType() + " at " + format(location));
             finishRegrowth(pending);
             return;
         }
 
+        plugin.pathDebug().trace(plugin, "regrowth", "place.batch", pending.treeType() + " placed=" + placed + " at " + format(location));
         Bukkit.getRegionScheduler().runDelayed(
                 plugin,
                 location,
@@ -706,5 +732,9 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         World world = location.getWorld();
         String worldName = world == null ? "unknown" : world.getName();
         return worldName + " " + location.getBlockX() + "," + location.getBlockY() + "," + location.getBlockZ();
+    }
+
+    private static String format(PendingRegrowth pending) {
+        return pending.x() + "," + pending.y() + "," + pending.z();
     }
 }
