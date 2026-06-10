@@ -500,6 +500,12 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     private void placeNextBatch(ActiveRegrowth active) {
         PendingRegrowth pending = active.pending();
+        if (!isCurrentActiveRegrowth(active)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "place.skip-stale-active",
+                    pending.treeType() + " at " + format(pending));
+            return;
+        }
+
         World world = pending.world();
         if (world == null) {
             removeRegrowth(pending);
@@ -562,6 +568,10 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
                 task -> placeNextBatch(active),
                 currentConfig.growthStepTicks()
         );
+    }
+
+    private boolean isCurrentActiveRegrowth(ActiveRegrowth active) {
+        return activeRegrowth.get(active.pending().key()) == active;
     }
 
     private void retryLater(PendingRegrowth pending) {
