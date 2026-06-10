@@ -22,6 +22,7 @@ public final class ArchitecturePathDebug {
     private final ConcurrentMap<String, AtomicLong> moduleCounts = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, AtomicLong> pathCounts = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, AtomicLong> failureCounts = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, AtomicLong> markerCounts = new ConcurrentHashMap<>();
     private final AtomicBoolean saveRunning = new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
     private final Deque<String> recentEvents = new ArrayDeque<>();
@@ -44,7 +45,9 @@ public final class ArchitecturePathDebug {
 
         moduleCounts.computeIfAbsent(module, key -> new AtomicLong()).incrementAndGet();
         pathCounts.computeIfAbsent(module + "." + path, key -> new AtomicLong()).incrementAndGet();
-        recordRecent(currentConfig, module, path, detail);
+        String marker = markerFor(path);
+        markerCounts.computeIfAbsent(marker, key -> new AtomicLong()).incrementAndGet();
+        recordRecent(currentConfig, marker, module, path, detail);
         saveSoon(plugin, currentConfig);
     }
 
@@ -56,8 +59,10 @@ public final class ArchitecturePathDebug {
 
         moduleCounts.computeIfAbsent(module, key -> new AtomicLong()).incrementAndGet();
         long count = pathCounts.computeIfAbsent(module + "." + path, key -> new AtomicLong()).incrementAndGet();
+        String marker = markerFor(path);
+        markerCounts.computeIfAbsent(marker, key -> new AtomicLong()).incrementAndGet();
         if (count <= 5 || Long.bitCount(count) == 1) {
-            recordRecent(currentConfig, module, path, detail + " count=" + count);
+            recordRecent(currentConfig, marker, module, path, detail + " count=" + count);
         }
         saveSoon(plugin, currentConfig);
     }
@@ -71,8 +76,9 @@ public final class ArchitecturePathDebug {
         long failureCount = failureCounts.computeIfAbsent(reason, key -> new AtomicLong()).incrementAndGet();
         moduleCounts.computeIfAbsent(module, key -> new AtomicLong()).incrementAndGet();
         pathCounts.computeIfAbsent(module + ".blocked." + reason, key -> new AtomicLong()).incrementAndGet();
+        markerCounts.computeIfAbsent("GATE", key -> new AtomicLong()).incrementAndGet();
         if (failureCount <= 5 || Long.bitCount(failureCount) == 1) {
-            recordRecent(currentConfig, module, "blocked." + reason, detail + " count=" + failureCount);
+            recordRecent(currentConfig, "GATE", module, "blocked." + reason, detail + " count=" + failureCount);
         }
         saveSoon(plugin, currentConfig);
     }
@@ -116,10 +122,12 @@ public final class ArchitecturePathDebug {
         yaml.set("recent-event-limit", currentConfig.recentEvents());
         yaml.set("save-interval-millis", currentConfig.saveIntervalMillis());
         writeCounts(yaml.createSection("module-counts"), moduleCounts);
+        writeCounts(yaml.createSection("marker-counts"), markerCounts);
         writeCounts(yaml.createSection("path-counts"), pathCounts);
         writeCounts(yaml.createSection("failure-summary"), failureCounts);
+        writeMarkerLegend(yaml.createSection("marker-legend"));
         yaml.set("recent-events", recentEventsSnapshot());
-        yaml.set("notes", "This file traces high-level decision paths. Feature-specific files still hold deeper wind/nether maps.");
+        yaml.set("notes", "Recent events use [MARKER][module] path -> detail. Feature-specific files still hold deeper wind/nether maps.");
 
         File file = new File(plugin.getDataFolder(), "architecture-pathfinding.debug.yml");
         File parent = file.getParentFile();
@@ -141,18 +149,47 @@ public final class ArchitecturePathDebug {
                 .forEach(entry -> section.set(entry.getKey(), entry.getValue().get()));
     }
 
-    private void recordRecent(ArchitecturePathDebugConfig currentConfig, String module, String path, String detail) {
+    private void writeMarkerLegend(ConfigurationSection section) {
+        section.set("CONFIG", "loaded or reloaded settings");
+        section.set("SCHED", "scheduler handoff or delayed continuation");
+        section.set("GATE", "safety check or blocked reason");
+        section.set("SAVE", "runtime state/config persistence");
+        section.set("ACTION", "world-changing or visible action");
+        section.set("STATE", "queue/source/lifecycle state change");
+        section.set("DEBUG", "debug file write or debug artifact update");
+    }
+
+    private void recordRecent(ArchitecturePathDebugConfig currentConfig, String marker, String module, String path, String detail) {
         int limit = currentConfig.recentEvents();
         if (limit <= 0) {
             return;
         }
 
         synchronized (recentEvents) {
-            recentEvents.addLast(Instant.now() + " [" + module + "] " + path + " -> " + detail);
+            recentEvents.addLast(Instant.now() + " [" + marker + "][" + module + "] " + path + " -> " + detail);
             while (recentEvents.size() > limit) {
                 recentEvents.removeFirst();
             }
         }
+    }
+
+    private String markerFor(String path) {
+        if (path.startsWith("config.")) {
+            return "CONFIG";
+        }
+        if (path.startsWith("scheduler.")) {
+            return "SCHED";
+        }
+        if (path.startsWith("blocked.") || path.contains(".skip.") || path.contains(".wait") || path.contains(".reject")) {
+            return "GATE";
+        }
+        if (path.startsWith("persistence.")) {
+            return path.toLowerCase(java.util.Locale.ROOT).contains("debug") ? "DEBUG" : "SAVE";
+        }
+        if (path.contains(".place") || path.contains(".replace") || path.contains(".remove-block")) {
+            return "ACTION";
+        }
+        return "STATE";
     }
 
     private List<String> recentEventsSnapshot() {
