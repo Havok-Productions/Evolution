@@ -86,6 +86,9 @@ nether-corruption:
   attempts-per-step: 96
   required-player-distance-chunks: 8
   player-portal-scan-radius: 32
+  debug:
+    recent-events: 40
+    map-radius: 24
 
 # Wind is mostly visible through leaves. It spawns subtle falling-leaf motion near
 # tree canopies and rarely lets leaves settle into natural, surface-only litter.

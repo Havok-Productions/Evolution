@@ -12,6 +12,8 @@ final class NetherCorruptionConfig {
     private final int attemptsPerStep;
     private final int requiredPlayerDistanceChunks;
     private final int playerPortalScanRadius;
+    private final int debugRecentEvents;
+    private final int debugMapRadius;
 
     private NetherCorruptionConfig(
             boolean enabled,
@@ -21,7 +23,9 @@ final class NetherCorruptionConfig {
             int verticalRadius,
             int attemptsPerStep,
             int requiredPlayerDistanceChunks,
-            int playerPortalScanRadius
+            int playerPortalScanRadius,
+            int debugRecentEvents,
+            int debugMapRadius
     ) {
         this.enabled = enabled;
         this.spreadStepTicks = spreadStepTicks;
@@ -31,6 +35,8 @@ final class NetherCorruptionConfig {
         this.attemptsPerStep = attemptsPerStep;
         this.requiredPlayerDistanceChunks = requiredPlayerDistanceChunks;
         this.playerPortalScanRadius = playerPortalScanRadius;
+        this.debugRecentEvents = debugRecentEvents;
+        this.debugMapRadius = debugMapRadius;
     }
 
     static NetherCorruptionConfig load(SlowTreesPlugin plugin) {
@@ -43,7 +49,9 @@ final class NetherCorruptionConfig {
                 Math.max(1, config.getInt("nether-corruption.vertical-radius", 8)),
                 Math.max(1, config.getInt("nether-corruption.attempts-per-step", 96)),
                 Math.max(0, config.getInt("nether-corruption.required-player-distance-chunks", 8)),
-                Math.max(0, config.getInt("nether-corruption.player-portal-scan-radius", 32))
+                Math.max(0, config.getInt("nether-corruption.player-portal-scan-radius", 32)),
+                Math.max(0, config.getInt("nether-corruption.debug.recent-events", 40)),
+                Math.max(4, config.getInt("nether-corruption.debug.map-radius", 24))
         );
     }
 
@@ -77,5 +85,13 @@ final class NetherCorruptionConfig {
 
     int playerPortalScanRadius() {
         return playerPortalScanRadius;
+    }
+
+    int debugRecentEvents() {
+        return debugRecentEvents;
+    }
+
+    int debugMapRadius() {
+        return debugMapRadius;
     }
 }

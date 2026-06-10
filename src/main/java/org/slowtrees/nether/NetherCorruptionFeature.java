@@ -38,6 +38,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     private final ConcurrentMap<String, PortalSource> sources = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> nextPortalScanMillis = new ConcurrentHashMap<>();
     private final NetherTerrainMimic terrainMimic = new NetherTerrainMimic();
+    private final NetherMapDebug mapDebug = new NetherMapDebug();
     private final Random random = new Random();
     private final AtomicLong changedBlocks = new AtomicLong();
     private volatile NetherCorruptionConfig config;
@@ -55,6 +56,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     @Override
     public void onDisable() {
         nextPortalScanMillis.clear();
+        mapDebug.saveNow(plugin);
         saveSources();
     }
 
@@ -201,9 +203,11 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             }
 
             Block block = target.get();
-            Optional<Material> mimic = terrainMimic.mimic(block, random);
-            if (mimic.isPresent() && mimic.get() != block.getType()) {
-                block.setType(mimic.get(), false);
+            Material original = block.getType();
+            NetherMimicResult mimic = terrainMimic.mimic(block, source, random);
+            if (mimic != null && mimic.material() != original) {
+                block.setType(mimic.material(), false);
+                mapDebug.recordReplacement(plugin, currentConfig, source, block, original, mimic, terrainMimic);
                 changed++;
             }
         }
