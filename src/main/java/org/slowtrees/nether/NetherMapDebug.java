@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import org.bukkit.Bukkit;
@@ -23,13 +24,11 @@ import org.slowtrees.core.SlowTreesPlugin;
 
 final class NetherMapDebug {
     private final ConcurrentMap<String, SourceMapSnapshot> sourceMaps = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ConcurrentMap<String, MapCell>> sourceCells = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, TranslationRule> translationRules = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Integer, AtomicLong> translationCounts = new ConcurrentHashMap<>();
+    private final AtomicInteger nextTranslationId = new AtomicInteger(1);
     private final AtomicLong replacements = new AtomicLong();
-    private final AtomicLong symbolOne = new AtomicLong();
-    private final AtomicLong symbolTwo = new AtomicLong();
-    private final AtomicLong symbolThree = new AtomicLong();
-    private final AtomicLong symbolFour = new AtomicLong();
-    private final AtomicLong symbolFive = new AtomicLong();
-    private final AtomicLong symbolSix = new AtomicLong();
     private final AtomicBoolean saveRunning = new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
     private final Deque<String> recentEvents = new ArrayDeque<>();
@@ -40,17 +39,19 @@ final class NetherMapDebug {
             PortalSource source,
             Block block,
             Material original,
-            NetherMimicResult result,
-            NetherTerrainMimic terrainMimic
+            NetherMimicResult result
     ) {
+        TranslationRule rule = translationRule(original, result.material());
         replacements.incrementAndGet();
-        incrementSymbol(result.mapSymbol());
+        translationCounts.computeIfAbsent(rule.id(), id -> new AtomicLong()).incrementAndGet();
         recordEvent(config, "replace: " + format(block) + " "
                 + original + " -> " + result.material()
-                + " symbol=" + result.mapSymbol()
+                + " translation=" + rule.id()
                 + " style=" + result.style().displayName());
 
-        sourceMaps.put(source.key(), buildSnapshot(source, block.getWorld(), config, terrainMimic));
+        sourceCells.computeIfAbsent(source.key(), key -> new ConcurrentHashMap<>())
+                .put(cellKey(block.getX(), block.getZ()), new MapCell(block.getX(), block.getY(), block.getZ(), rule.id(), result.style().displayName()));
+        sourceMaps.put(source.key(), buildSnapshot(source, block.getWorld(), config));
         saveSoon(plugin);
     }
 
@@ -81,59 +82,47 @@ final class NetherMapDebug {
         save(plugin);
     }
 
-    private SourceMapSnapshot buildSnapshot(PortalSource source, World world, NetherCorruptionConfig config, NetherTerrainMimic terrainMimic) {
+    private SourceMapSnapshot buildSnapshot(PortalSource source, World world, NetherCorruptionConfig config) {
         int radius = config.debugMapRadius();
-        int startY = Math.min(world.getMaxHeight() - 1, source.centerY() + config.verticalRadius());
-        int endY = Math.max(world.getMinHeight(), source.centerY() - config.verticalRadius());
         List<String> rows = new ArrayList<>();
+        ConcurrentMap<String, MapCell> cells = sourceCells.getOrDefault(source.key(), new ConcurrentHashMap<>());
 
         for (int z = source.centerZ() - radius; z <= source.centerZ() + radius; z++) {
-            StringBuilder row = new StringBuilder(radius * 2 + 1);
+            List<String> row = new ArrayList<>();
             for (int x = source.centerX() - radius; x <= source.centerX() + radius; x++) {
-                row.append(symbolAt(world, x, z, startY, endY, source, terrainMimic));
+                row.add(tokenAt(world, x, z, source, cells));
             }
-            rows.add(row.toString());
+            rows.add(String.join(" ", row));
         }
 
-        return new SourceMapSnapshot(format(source, world), radius, startY + ".." + endY, rows);
+        return new SourceMapSnapshot(format(source, world), radius, "translation tokens are replacement pairs from translation-map", rows);
     }
 
-    private char symbolAt(World world, int x, int z, int startY, int endY, PortalSource source, NetherTerrainMimic terrainMimic) {
+    private String tokenAt(World world, int x, int z, PortalSource source, ConcurrentMap<String, MapCell> cells) {
         if (x == source.centerX() && z == source.centerZ()) {
-            return 'P';
+            return "P";
         }
 
         int chunkX = x >> 4;
         int chunkZ = z >> 4;
         if (!world.isChunkLoaded(chunkX, chunkZ)) {
-            return '?';
+            return "?";
         }
 
-        for (int y = startY; y >= endY; y--) {
-            Material material = world.getBlockAt(x, y, z).getType();
-            if (material == Material.NETHER_PORTAL) {
-                return 'P';
-            }
-
-            int symbol = terrainMimic.mapSymbol(material);
-            if (symbol > 0) {
-                return Character.forDigit(symbol, 10);
-            }
+        MapCell cell = cells.get(cellKey(x, z));
+        if (cell != null) {
+            return Integer.toString(cell.translationId());
         }
 
-        return '.';
+        return ".";
     }
 
     private void save(SlowTreesPlugin plugin) {
         YamlConfiguration yaml = new YamlConfiguration();
         writeLegend(yaml.createSection("legend"));
+        writeTranslationMap(yaml.createSection("translation-map"));
         yaml.set("counters.replacements", replacements.get());
-        yaml.set("counters.by-symbol.1", symbolOne.get());
-        yaml.set("counters.by-symbol.2", symbolTwo.get());
-        yaml.set("counters.by-symbol.3", symbolThree.get());
-        yaml.set("counters.by-symbol.4", symbolFour.get());
-        yaml.set("counters.by-symbol.5", symbolFive.get());
-        yaml.set("counters.by-symbol.6", symbolSix.get());
+        writeTranslationCounts(yaml.createSection("counters.by-translation"));
         yaml.set("recent-events", recentEventsSnapshot());
 
         ConfigurationSection sources = yaml.createSection("sources");
@@ -143,7 +132,7 @@ final class NetherMapDebug {
             ConfigurationSection section = sources.createSection(Integer.toString(index++));
             section.set("source", snapshot.source());
             section.set("radius", snapshot.radius());
-            section.set("y-range", snapshot.yRange());
+            section.set("row-format", snapshot.rowFormat());
             section.set("rows", snapshot.rows());
         }
 
@@ -162,15 +151,33 @@ final class NetherMapDebug {
     }
 
     private void writeLegend(ConfigurationSection section) {
-        section.set("1", "NETHERRACK");
-        section.set("2", "CRIMSON_NYLIUM");
-        section.set("3", "WARPED_NYLIUM");
-        section.set("4", "SOUL_SOIL or SOUL_SAND");
-        section.set("5", "BLACKSTONE or BASALT");
-        section.set("6", "LAVA");
-        section.set(".", "unchanged or no Nether mimic block in scanned y-range");
+        section.set("number", "translation id from translation-map, such as GRASS_BLOCK -> NETHERRACK");
+        section.set(".", "no recorded replacement at this x/z in this debug session");
         section.set("P", "portal/source center");
         section.set("?", "chunk not loaded while map was built");
+        section.set("rows", "space-separated tokens, so ids can grow past 9 without losing readability");
+    }
+
+    private void writeTranslationMap(ConfigurationSection section) {
+        translationRules.values().stream()
+                .sorted((first, second) -> Integer.compare(first.id(), second.id()))
+                .forEach(rule -> {
+                    ConfigurationSection ruleSection = section.createSection(Integer.toString(rule.id()));
+                    ruleSection.set("from", rule.from());
+                    ruleSection.set("to", rule.to());
+                    ruleSection.set("label", rule.from() + " -> " + rule.to());
+                });
+    }
+
+    private void writeTranslationCounts(ConfigurationSection section) {
+        translationCounts.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> section.set(Integer.toString(entry.getKey()), entry.getValue().get()));
+    }
+
+    private TranslationRule translationRule(Material original, Material replacement) {
+        String key = original.name() + "->" + replacement.name();
+        return translationRules.computeIfAbsent(key, ignored -> new TranslationRule(nextTranslationId.getAndIncrement(), original.name(), replacement.name()));
     }
 
     private void recordEvent(NetherCorruptionConfig config, String event) {
@@ -193,17 +200,8 @@ final class NetherMapDebug {
         }
     }
 
-    private void incrementSymbol(int symbol) {
-        switch (symbol) {
-            case 1 -> symbolOne.incrementAndGet();
-            case 2 -> symbolTwo.incrementAndGet();
-            case 3 -> symbolThree.incrementAndGet();
-            case 4 -> symbolFour.incrementAndGet();
-            case 5 -> symbolFive.incrementAndGet();
-            case 6 -> symbolSix.incrementAndGet();
-            default -> {
-            }
-        }
+    private String cellKey(int x, int z) {
+        return x + ":" + z;
     }
 
     private String format(Block block) {
@@ -214,6 +212,12 @@ final class NetherMapDebug {
         return world.getName() + " " + source.centerX() + "," + source.centerY() + "," + source.centerZ();
     }
 
-    private record SourceMapSnapshot(String source, int radius, String yRange, List<String> rows) {
+    private record SourceMapSnapshot(String source, int radius, String rowFormat, List<String> rows) {
+    }
+
+    private record TranslationRule(int id, String from, String to) {
+    }
+
+    private record MapCell(int x, int y, int z, int translationId, String style) {
     }
 }

@@ -225,7 +225,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
                 plugin.pathDebug().trace(plugin, "nether", "spread.replace", format(block)
                         + " " + original + "->" + mimic.material()
                         + " style=" + mimic.style().displayName());
-                mapDebug.recordReplacement(plugin, currentConfig, source, block, original, mimic, terrainMimic);
+                mapDebug.recordReplacement(plugin, currentConfig, source, block, original, mimic);
                 changed++;
             }
         }

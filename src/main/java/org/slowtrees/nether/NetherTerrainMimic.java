@@ -64,18 +64,6 @@ final class NetherTerrainMimic {
                 || material == Material.COBBLED_DEEPSLATE;
     }
 
-    int mapSymbol(Material material) {
-        return switch (material) {
-            case NETHERRACK -> 1;
-            case CRIMSON_NYLIUM -> 2;
-            case WARPED_NYLIUM -> 3;
-            case SOUL_SOIL, SOUL_SAND -> 4;
-            case BLACKSTONE, BASALT -> 5;
-            case LAVA -> 6;
-            default -> 0;
-        };
-    }
-
     private NetherMimicResult soilResult(NetherBiomeStyle style, Random random) {
         return switch (style) {
             case CRIMSON -> result(random.nextInt(100) < 80 ? Material.CRIMSON_NYLIUM : Material.NETHERRACK, style);
@@ -95,7 +83,7 @@ final class NetherTerrainMimic {
     }
 
     private NetherMimicResult result(Material material, NetherBiomeStyle style) {
-        return new NetherMimicResult(material, style, mapSymbol(material));
+        return new NetherMimicResult(material, style);
     }
 
     private NetherBiomeStyle styleAt(PortalSource source, int x, int z) {
