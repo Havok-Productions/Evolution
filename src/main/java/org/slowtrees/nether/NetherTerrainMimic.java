@@ -31,11 +31,11 @@ final class NetherTerrainMimic {
         }
 
         if (type == Material.SAND || type == Material.RED_SAND) {
-            return result(Material.SOUL_SAND, style);
+            return sandResult(style, random);
         }
 
         if (type == Material.GRAVEL || type == Material.CLAY) {
-            return result(Material.SOUL_SOIL, style);
+            return gravelResult(style, random);
         }
 
         return null;
@@ -66,20 +66,68 @@ final class NetherTerrainMimic {
 
     private NetherMimicResult soilResult(NetherBiomeStyle style, Random random) {
         return switch (style) {
-            case CRIMSON -> result(random.nextInt(100) < 80 ? Material.CRIMSON_NYLIUM : Material.NETHERRACK, style);
-            case WARPED -> result(random.nextInt(100) < 80 ? Material.WARPED_NYLIUM : Material.NETHERRACK, style);
-            case SOUL -> result(random.nextInt(100) < 75 ? Material.SOUL_SOIL : Material.NETHERRACK, style);
-            case BASALT -> result(random.nextInt(100) < 30 ? Material.BLACKSTONE : Material.NETHERRACK, style);
-            case WASTES -> result(randomWastesSoil(random), style);
+            case CRIMSON -> result(weighted(random,
+                    weighted(Material.NETHERRACK, 72),
+                    weighted(Material.CRIMSON_NYLIUM, 26),
+                    weighted(Material.BLACKSTONE, 2)), style);
+            case WARPED -> result(weighted(random,
+                    weighted(Material.NETHERRACK, 72),
+                    weighted(Material.WARPED_NYLIUM, 26),
+                    weighted(Material.BLACKSTONE, 2)), style);
+            case SOUL -> result(weighted(random,
+                    weighted(Material.NETHERRACK, 62),
+                    weighted(Material.SOUL_SOIL, 30),
+                    weighted(Material.SOUL_SAND, 8)), style);
+            case BASALT -> result(weighted(random,
+                    weighted(Material.NETHERRACK, 72),
+                    weighted(Material.BLACKSTONE, 20),
+                    weighted(Material.BASALT, 8)), style);
+            case WASTES -> result(weighted(random,
+                    weighted(Material.NETHERRACK, 88),
+                    weighted(Material.CRIMSON_NYLIUM, 4),
+                    weighted(Material.WARPED_NYLIUM, 4),
+                    weighted(Material.SOUL_SOIL, 3),
+                    weighted(Material.BLACKSTONE, 1)), style);
         };
     }
 
     private NetherMimicResult stoneResult(NetherBiomeStyle style, Random random) {
         return switch (style) {
-            case BASALT -> result(random.nextInt(100) < 65 ? Material.BASALT : Material.BLACKSTONE, style);
-            case SOUL -> result(random.nextInt(100) < 35 ? Material.BASALT : Material.NETHERRACK, style);
-            case CRIMSON, WARPED, WASTES -> result(randomWastesStone(random), style);
+            case BASALT -> result(weighted(random,
+                    weighted(Material.BASALT, 48),
+                    weighted(Material.BLACKSTONE, 34),
+                    weighted(Material.NETHERRACK, 18)), style);
+            case SOUL -> result(weighted(random,
+                    weighted(Material.NETHERRACK, 65),
+                    weighted(Material.BLACKSTONE, 20),
+                    weighted(Material.BASALT, 15)), style);
+            case CRIMSON, WARPED, WASTES -> result(weighted(random,
+                    weighted(Material.NETHERRACK, 75),
+                    weighted(Material.BLACKSTONE, 18),
+                    weighted(Material.BASALT, 7)), style);
         };
+    }
+
+    private NetherMimicResult sandResult(NetherBiomeStyle style, Random random) {
+        if (style == NetherBiomeStyle.SOUL) {
+            return result(weighted(random,
+                    weighted(Material.SOUL_SAND, 85),
+                    weighted(Material.SOUL_SOIL, 15)), style);
+        }
+        return result(weighted(random,
+                weighted(Material.SOUL_SAND, 70),
+                weighted(Material.NETHERRACK, 30)), style);
+    }
+
+    private NetherMimicResult gravelResult(NetherBiomeStyle style, Random random) {
+        if (style == NetherBiomeStyle.SOUL) {
+            return result(weighted(random,
+                    weighted(Material.SOUL_SOIL, 80),
+                    weighted(Material.SOUL_SAND, 20)), style);
+        }
+        return result(weighted(random,
+                weighted(Material.SOUL_SOIL, 65),
+                weighted(Material.NETHERRACK, 35)), style);
     }
 
     private NetherMimicResult result(Material material, NetherBiomeStyle style) {
@@ -118,28 +166,27 @@ final class NetherTerrainMimic {
         return value;
     }
 
-    private Material randomWastesSoil(Random random) {
-        int roll = random.nextInt(100);
-        if (roll < 70) {
-            return Material.NETHERRACK;
+    private Material weighted(Random random, WeightedMaterial... materials) {
+        int total = 0;
+        for (WeightedMaterial material : materials) {
+            total += material.weight();
         }
-        if (roll < 82) {
-            return Material.CRIMSON_NYLIUM;
+
+        int roll = random.nextInt(total);
+        int running = 0;
+        for (WeightedMaterial material : materials) {
+            running += material.weight();
+            if (roll < running) {
+                return material.material();
+            }
         }
-        if (roll < 94) {
-            return Material.WARPED_NYLIUM;
-        }
-        return Material.SOUL_SOIL;
+        return materials[materials.length - 1].material();
     }
 
-    private Material randomWastesStone(Random random) {
-        int roll = random.nextInt(100);
-        if (roll < 55) {
-            return Material.NETHERRACK;
-        }
-        if (roll < 80) {
-            return Material.BLACKSTONE;
-        }
-        return Material.BASALT;
+    private WeightedMaterial weighted(Material material, int weight) {
+        return new WeightedMaterial(material, weight);
+    }
+
+    private record WeightedMaterial(Material material, int weight) {
     }
 }
