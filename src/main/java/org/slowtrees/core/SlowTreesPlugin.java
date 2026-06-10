@@ -29,6 +29,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
         getConfig().options().copyDefaults(true);
         saveConfig();
         architecturePathDebug = new ArchitecturePathDebug(this);
+        architecturePathDebug.resetForStartup(this);
         architecturePathDebug.trace(this, "core", "persistence.save-default-config", "config.yml");
         architecturePathDebug.trace(this, "core", "persistence.save-config", "config.yml defaults merged");
         architecturePathDebug.trace(this, "core", "plugin.enable.start", "default config saved and merged");

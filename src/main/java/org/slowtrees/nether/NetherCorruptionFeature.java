@@ -52,6 +52,8 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     @Override
     public void onEnable() {
+        plugin.pathDebug().trace(plugin, "nether", "persistence.save-map-debug.now", "MapDebug.yml startup refresh");
+        mapDebug.saveNow(plugin);
         plugin.pathDebug().trace(plugin, "nether", "enable.load-sources", "loading stored portal sources");
         loadSources();
     }

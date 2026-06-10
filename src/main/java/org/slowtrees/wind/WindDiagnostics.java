@@ -28,6 +28,7 @@ final class WindDiagnostics {
     private final AtomicBoolean saveRunning = new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
     private final Deque<String> recentEvents = new ArrayDeque<>();
+    private final String sessionStartedAt = Instant.now().toString();
 
     void recordCanopySearch() {
         canopySearches.incrementAndGet();
@@ -123,6 +124,7 @@ final class WindDiagnostics {
 
     private void save(SlowTreesPlugin plugin, WindConfig config) {
         YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("session-started-at", sessionStartedAt);
         yaml.set("wind.enabled", config.enabled());
         yaml.set("wind.tree-search-radius", config.treeSearchRadius());
         yaml.set("wind.required-player-distance-chunks", config.requiredPlayerDistanceChunks());

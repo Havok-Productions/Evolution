@@ -145,6 +145,7 @@ wind:
   leaf-litter:
     placement-step-ticks: 80
     placement-attempts: 48
-    max-per-chunk: 32
+    # Prevents endless leaf carpet buildup. Set to 0 to remove the cap.
+    max-per-chunk: 96
   debug:
     recent-events: 40

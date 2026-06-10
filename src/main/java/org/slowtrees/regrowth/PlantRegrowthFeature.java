@@ -108,6 +108,8 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             if (cancelSameColumnRegrowth(block)) {
                 plugin.pathDebug().trace(plugin, "regrowth", "break.lowest-support-cancel", format(block.getLocation()));
             }
+            plugin.pathDebug().trace(plugin, "regrowth", "break.lowest-support-suppress-regrowth",
+                    "no queue created for cut support at " + format(block.getLocation()));
             return;
         }
 
@@ -132,6 +134,9 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             cancelAnchoredRegrowth(baseBlock);
             return;
         }
+
+        plugin.pathDebug().trace(plugin, "regrowth", "break.upper-plant-queue",
+                block.getType() + " at " + format(block.getLocation()) + " base=" + format(baseBlock.getLocation()));
 
         PendingRegrowth pending = new PendingRegrowth(
                 baseBlock.getWorld().getUID(),
@@ -173,6 +178,8 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private void cancelRegrowth(PendingRegrowth pending) {
         pendingRegrowth.remove(pending.key());
         unregisterActiveRegrowth(pending.key());
+        plugin.pathDebug().trace(plugin, "regrowth", "queue.cancel",
+                pending.treeType() + " at " + format(pending));
         saveQueuedRegrowth();
     }
 

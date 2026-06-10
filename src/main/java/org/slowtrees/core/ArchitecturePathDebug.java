@@ -26,10 +26,23 @@ public final class ArchitecturePathDebug {
     private final AtomicBoolean saveRunning = new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
     private final Deque<String> recentEvents = new ArrayDeque<>();
+    private final String sessionStartedAt = Instant.now().toString();
     private volatile ArchitecturePathDebugConfig config;
 
     ArchitecturePathDebug(SlowTreesPlugin plugin) {
         this.config = ArchitecturePathDebugConfig.load(plugin);
+    }
+
+    void resetForStartup(SlowTreesPlugin plugin) {
+        moduleCounts.clear();
+        pathCounts.clear();
+        failureCounts.clear();
+        markerCounts.clear();
+        synchronized (recentEvents) {
+            recentEvents.clear();
+        }
+        nextSaveMillis.set(0L);
+        save(plugin);
     }
 
     void reload(SlowTreesPlugin plugin) {
@@ -119,6 +132,7 @@ public final class ArchitecturePathDebug {
         YamlConfiguration yaml = new YamlConfiguration();
         ArchitecturePathDebugConfig currentConfig = config;
         yaml.set("enabled", currentConfig.enabled());
+        yaml.set("session-started-at", sessionStartedAt);
         yaml.set("recent-event-limit", currentConfig.recentEvents());
         yaml.set("save-interval-millis", currentConfig.saveIntervalMillis());
         writeCounts(yaml.createSection("module-counts"), moduleCounts);

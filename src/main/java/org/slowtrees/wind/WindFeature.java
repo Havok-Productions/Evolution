@@ -37,6 +37,7 @@ public final class WindFeature implements PluginFeature, Listener {
 
     @Override
     public void onEnable() {
+        diagnostics.saveNow(plugin, config);
         plugin.pathDebug().trace(plugin, "wind", "enable.schedule-online-players", "players=" + Bukkit.getOnlinePlayers().size());
         for (Player player : Bukkit.getOnlinePlayers()) {
             schedulePlayerWind(player, 1L);
@@ -210,12 +211,6 @@ public final class WindFeature implements PluginFeature, Listener {
     }
 
     private void maybePlaceLeafLitter(Player player, Block canopy, WindPattern currentPattern, WindConfig currentConfig) {
-        if (currentConfig.maxLeafLitterPerChunk() <= 0) {
-            plugin.pathDebug().trace(plugin, "wind", "litter.skip.chunk-cap-zero", format(canopy));
-            diagnostics.recordEvent(currentConfig, "litter-skip: max-per-chunk is 0 at " + format(canopy));
-            return;
-        }
-
         long now = System.currentTimeMillis();
         long nextAttempt = nextLitterAttemptMillis.getOrDefault(player.getUniqueId(), 0L);
         if (now < nextAttempt) {
@@ -257,7 +252,7 @@ public final class WindFeature implements PluginFeature, Listener {
                 diagnostics.recordEvent(currentConfig, "litter-failed: target too far from player at " + format(block));
                 continue;
             }
-            if (countLeafLitterInChunk(block) >= currentConfig.maxLeafLitterPerChunk()) {
+            if (isLeafLitterChunkCapped(block, currentConfig)) {
                 plugin.pathDebug().failure(plugin, "wind", "chunk-cap", format(block));
                 plugin.pathDebug().trace(plugin, "wind", "litter.reject.chunk-cap", format(block));
                 diagnostics.recordChunkCapReject();
@@ -321,6 +316,11 @@ public final class WindFeature implements PluginFeature, Listener {
             }
         }
         return Optional.empty();
+    }
+
+    private boolean isLeafLitterChunkCapped(Block block, WindConfig currentConfig) {
+        int maxPerChunk = currentConfig.maxLeafLitterPerChunk();
+        return maxPerChunk > 0 && countLeafLitterInChunk(block) >= maxPerChunk;
     }
 
     private int countLeafLitterInChunk(Block block) {

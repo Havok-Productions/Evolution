@@ -32,6 +32,7 @@ final class NetherMapDebug {
     private final AtomicBoolean saveRunning = new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
     private final Deque<String> recentEvents = new ArrayDeque<>();
+    private final String sessionStartedAt = Instant.now().toString();
 
     void recordReplacement(
             SlowTreesPlugin plugin,
@@ -121,6 +122,7 @@ final class NetherMapDebug {
 
     private void save(SlowTreesPlugin plugin) {
         YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("session-started-at", sessionStartedAt);
         writeLegend(yaml.createSection("legend"));
         writeTranslationMap(yaml.createSection("translation-map"));
         yaml.set("counters.replacements", replacements.get());
