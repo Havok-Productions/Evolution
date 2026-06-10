@@ -2,13 +2,13 @@
 initial-delay-ticks: 600
 
 # Once regrowth begins, this controls how quickly blocks appear.
-# Default: 1 block every 30 seconds at 20 TPS.
-growth-step-ticks: 600
+# With world-health mode enabled at 0.15x, 135 ticks becomes about 45 seconds.
+growth-step-ticks: 135
 blocks-per-growth-step: 1
 
 # World health mode slows natural regrowth without changing the normal baseline.
 # A growth-speed-multiplier of 0.15 means 15% normal speed.
-# With the defaults above, enabled mode grows about 1 block every 200 seconds.
+# With the defaults above, enabled mode grows about 1 block every 45 seconds.
 world-health-mode:
   enabled: true
   growth-speed-multiplier: 0.15
