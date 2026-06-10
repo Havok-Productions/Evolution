@@ -89,7 +89,7 @@ nether-corruption:
   enabled: true
   spread-step-ticks: 200
   blocks-per-step: 1
-  max-radius: 24
+  max-radius: 100
   vertical-radius: 8
   attempts-per-step: 96
   required-player-distance-chunks: 8
