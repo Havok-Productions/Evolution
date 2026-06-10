@@ -114,6 +114,10 @@ final class WindDiagnostics {
         });
     }
 
+    void saveNow(SlowTreesPlugin plugin, WindConfig config) {
+        save(plugin, config);
+    }
+
     private void save(SlowTreesPlugin plugin, WindConfig config) {
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("wind.enabled", config.enabled());

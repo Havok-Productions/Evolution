@@ -43,7 +43,7 @@ public final class WindFeature implements PluginFeature, Listener {
 
     @Override
     public void onDisable() {
-        diagnostics.saveAsync(plugin, config);
+        diagnostics.saveNow(plugin, config);
         nextLitterAttemptMillis.clear();
     }
 
