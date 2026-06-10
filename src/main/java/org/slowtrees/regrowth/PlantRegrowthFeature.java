@@ -102,6 +102,15 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             return;
         }
 
+        if (isDecayMaterial(block.getType()) && isLowestConnectedPlantBlock(block)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "break.lowest-support", block.getType() + " at " + format(block.getLocation()));
+            schedulePlantDecay(block, currentConfig);
+            if (cancelSameColumnRegrowth(block)) {
+                plugin.pathDebug().trace(plugin, "regrowth", "break.lowest-support-cancel", format(block.getLocation()));
+            }
+            return;
+        }
+
         if (interruptActiveRegrowth(block, currentConfig)) {
             plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-active", block.getType() + " at " + format(block.getLocation()));
             return;
@@ -165,6 +174,27 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         pendingRegrowth.remove(pending.key());
         unregisterActiveRegrowth(pending.key());
         saveQueuedRegrowth();
+    }
+
+    private boolean cancelSameColumnRegrowth(Block supportBlock) {
+        boolean cancelled = false;
+        for (PendingRegrowth pending : pendingRegrowth.values()) {
+            if (isSameColumnRegrowth(pending, supportBlock)) {
+                cancelRegrowth(pending);
+                cancelled = true;
+            }
+        }
+        return cancelled;
+    }
+
+    private boolean isSameColumnRegrowth(PendingRegrowth pending, Block supportBlock) {
+        World world = pending.world();
+        return world != null
+                && world.equals(supportBlock.getWorld())
+                && pending.x() == supportBlock.getX()
+                && pending.z() == supportBlock.getZ()
+                && pending.y() <= supportBlock.getY()
+                && pending.anchorMaterial() == supportBlock.getType();
     }
 
     private void schedulePlantDecay(Block baseBlock, PlantRegrowthConfig currentConfig) {
@@ -583,6 +613,11 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private boolean isDecayMaterial(Material material) {
         String name = material.name();
         return name.endsWith("_LOG") || name.endsWith("_STEM") || material == Material.MUSHROOM_STEM;
+    }
+
+    private boolean isLowestConnectedPlantBlock(Block block) {
+        return block.getY() <= block.getWorld().getMinHeight()
+                || block.getRelative(0, -1, 0).getType() != block.getType();
     }
 
     private boolean areChunksLoaded(World world, int chunkX, int chunkZ, int radius) {

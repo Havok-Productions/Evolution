@@ -88,7 +88,8 @@ mushroom-types:
 meadow-growth:
   enabled: true
   step-ticks: 60
-  search-radius: 18
+  # 0 means use the server view distance in blocks.
+  search-radius: 0
   attempts-per-step: 32
   blocks-per-step: 2
   required-player-distance-chunks: 6
@@ -129,17 +130,21 @@ nether-corruption:
 # tree canopies and rarely lets leaves settle into natural, surface-only litter.
 wind:
   enabled: true
-  gust-tick-interval: 10
+  gust-tick-interval: 8
   pattern-change-ticks: 6000
-  tree-search-radius: 18
+  tree-search-radius: 32
   required-player-distance-chunks: 6
+  particles:
+    clear-count: 16
+    rain-count: 8
+    storm-count: 24
   weather:
     clear-drift-radius: 10
     rain-drift-radius: 4
     storm-drift-radius: 16
   leaf-litter:
-    placement-step-ticks: 300
-    placement-attempts: 32
-    max-per-chunk: 16
+    placement-step-ticks: 80
+    placement-attempts: 48
+    max-per-chunk: 32
   debug:
     recent-events: 40

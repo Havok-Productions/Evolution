@@ -64,10 +64,14 @@ final class MeadowGrowthConfig {
 
     static MeadowGrowthConfig load(SlowTreesPlugin plugin) {
         FileConfiguration config = plugin.getConfig();
+        int configuredSearchRadius = Math.max(0, config.getInt("meadow-growth.search-radius", 0));
+        int effectiveSearchRadius = configuredSearchRadius == 0
+                ? Math.max(16, plugin.getServer().getViewDistance() * 16)
+                : configuredSearchRadius;
         return new MeadowGrowthConfig(
                 config.getBoolean("meadow-growth.enabled", true),
                 Math.max(20L, config.getLong("meadow-growth.step-ticks", 60L)),
-                Math.max(4, config.getInt("meadow-growth.search-radius", 18)),
+                effectiveSearchRadius,
                 Math.max(1, config.getInt("meadow-growth.attempts-per-step", 32)),
                 Math.max(1, config.getInt("meadow-growth.blocks-per-step", 2)),
                 Math.max(0, config.getInt("meadow-growth.required-player-distance-chunks", 6)),

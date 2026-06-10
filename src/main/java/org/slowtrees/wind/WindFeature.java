@@ -184,7 +184,7 @@ public final class WindFeature implements PluginFeature, Listener {
         World world = canopy.getWorld();
         boolean storm = world.hasStorm() && world.isThundering();
         boolean rain = world.hasStorm();
-        int count = storm ? 12 : rain ? 3 : 8;
+        int count = currentConfig.particleCount(storm, rain);
         double drift = Math.max(0.05D, currentPattern.strength() * (storm ? 0.18D : rain ? 0.06D : 0.12D));
         Location start = canopy.getLocation().add(0.5D, -0.2D, 0.5D);
         BlockData leafData = canopy.getBlockData();
