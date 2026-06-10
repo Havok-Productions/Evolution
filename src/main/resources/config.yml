@@ -1,5 +1,5 @@
-# Default: 1 second at 20 TPS.
-initial-delay-ticks: 20
+# Default: 30 seconds at 20 TPS before the first replacement block appears.
+initial-delay-ticks: 600
 
 # Once regrowth begins, this controls how quickly blocks appear.
 # Default: 1 block every 30 seconds at 20 TPS.
