@@ -1,5 +1,8 @@
 package org.slowtrees.nether;
 
+import java.util.Collection;
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.Random;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
@@ -16,29 +19,45 @@ final class NetherTerrainMimic {
     }
 
     NetherMimicResult mimic(Block block, PortalSource source, Random random) {
+        return mimic(block, source, random, java.util.List.of());
+    }
+
+    NetherMimicResult mimic(Block block, PortalSource source, Random random, Collection<Material> nearbyCorruption) {
         Material type = block.getType();
         NetherBiomeStyle style = styleAt(source, block.getX(), block.getZ());
         if (type == Material.WATER) {
             return result(Material.LAVA, style);
         }
 
+        NeighborInfluence influence = dominantInfluence(nearbyCorruption);
         if (isSoil(type)) {
-            return soilResult(style, random);
+            return soilResult(style, random, influence);
         }
 
         if (isStone(type)) {
-            return stoneResult(style, random);
+            return stoneResult(style, random, influence);
         }
 
         if (type == Material.SAND || type == Material.RED_SAND) {
-            return sandResult(style, random);
+            return sandResult(style, random, influence);
         }
 
         if (type == Material.GRAVEL || type == Material.CLAY) {
-            return gravelResult(style, random);
+            return gravelResult(style, random, influence);
         }
 
         return null;
+    }
+
+    boolean isCorruptionMaterial(Material material) {
+        return material == Material.LAVA
+                || material == Material.NETHERRACK
+                || material == Material.CRIMSON_NYLIUM
+                || material == Material.WARPED_NYLIUM
+                || material == Material.SOUL_SOIL
+                || material == Material.SOUL_SAND
+                || material == Material.BLACKSTONE
+                || material == Material.BASALT;
     }
 
     private boolean isSoil(Material material) {
@@ -64,25 +83,26 @@ final class NetherTerrainMimic {
                 || material == Material.COBBLED_DEEPSLATE;
     }
 
-    private NetherMimicResult soilResult(NetherBiomeStyle style, Random random) {
+    private NetherMimicResult soilResult(NetherBiomeStyle style, Random random, NeighborInfluence influence) {
+        Material preferred = soilPreference(influence, random);
         return switch (style) {
-            case CRIMSON -> result(weighted(random,
+            case CRIMSON -> result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.NETHERRACK, 72),
                     weighted(Material.CRIMSON_NYLIUM, 26),
                     weighted(Material.BLACKSTONE, 2)), style);
-            case WARPED -> result(weighted(random,
+            case WARPED -> result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.NETHERRACK, 72),
                     weighted(Material.WARPED_NYLIUM, 26),
                     weighted(Material.BLACKSTONE, 2)), style);
-            case SOUL -> result(weighted(random,
+            case SOUL -> result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.NETHERRACK, 62),
                     weighted(Material.SOUL_SOIL, 30),
                     weighted(Material.SOUL_SAND, 8)), style);
-            case BASALT -> result(weighted(random,
+            case BASALT -> result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.NETHERRACK, 72),
                     weighted(Material.BLACKSTONE, 20),
                     weighted(Material.BASALT, 8)), style);
-            case WASTES -> result(weighted(random,
+            case WASTES -> result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.NETHERRACK, 88),
                     weighted(Material.CRIMSON_NYLIUM, 4),
                     weighted(Material.WARPED_NYLIUM, 4),
@@ -91,41 +111,44 @@ final class NetherTerrainMimic {
         };
     }
 
-    private NetherMimicResult stoneResult(NetherBiomeStyle style, Random random) {
+    private NetherMimicResult stoneResult(NetherBiomeStyle style, Random random, NeighborInfluence influence) {
+        Material preferred = stonePreference(influence, random);
         return switch (style) {
-            case BASALT -> result(weighted(random,
+            case BASALT -> result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.BASALT, 48),
                     weighted(Material.BLACKSTONE, 34),
                     weighted(Material.NETHERRACK, 18)), style);
-            case SOUL -> result(weighted(random,
+            case SOUL -> result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.NETHERRACK, 65),
                     weighted(Material.BLACKSTONE, 20),
                     weighted(Material.BASALT, 15)), style);
-            case CRIMSON, WARPED, WASTES -> result(weighted(random,
+            case CRIMSON, WARPED, WASTES -> result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.NETHERRACK, 75),
                     weighted(Material.BLACKSTONE, 18),
                     weighted(Material.BASALT, 7)), style);
         };
     }
 
-    private NetherMimicResult sandResult(NetherBiomeStyle style, Random random) {
+    private NetherMimicResult sandResult(NetherBiomeStyle style, Random random, NeighborInfluence influence) {
+        Material preferred = sandPreference(influence);
         if (style == NetherBiomeStyle.SOUL) {
-            return result(weighted(random,
+            return result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.SOUL_SAND, 85),
                     weighted(Material.SOUL_SOIL, 15)), style);
         }
-        return result(weighted(random,
+        return result(weightedWithInfluence(random, preferred, influence,
                 weighted(Material.SOUL_SAND, 70),
                 weighted(Material.NETHERRACK, 30)), style);
     }
 
-    private NetherMimicResult gravelResult(NetherBiomeStyle style, Random random) {
+    private NetherMimicResult gravelResult(NetherBiomeStyle style, Random random, NeighborInfluence influence) {
+        Material preferred = gravelPreference(influence, random);
         if (style == NetherBiomeStyle.SOUL) {
-            return result(weighted(random,
+            return result(weightedWithInfluence(random, preferred, influence,
                     weighted(Material.SOUL_SOIL, 80),
                     weighted(Material.SOUL_SAND, 20)), style);
         }
-        return result(weighted(random,
+        return result(weightedWithInfluence(random, preferred, influence,
                 weighted(Material.SOUL_SOIL, 65),
                 weighted(Material.NETHERRACK, 35)), style);
     }
@@ -166,6 +189,98 @@ final class NetherTerrainMimic {
         return value;
     }
 
+    private NeighborInfluence dominantInfluence(Collection<Material> materials) {
+        Map<NetherMaterialFamily, Integer> counts = new EnumMap<>(NetherMaterialFamily.class);
+        for (Material material : materials) {
+            NetherMaterialFamily family = familyOf(material);
+            if (family != null && family != NetherMaterialFamily.LAVA) {
+                counts.merge(family, 1, Integer::sum);
+            }
+        }
+
+        NetherMaterialFamily dominant = null;
+        int dominantCount = 0;
+        for (Map.Entry<NetherMaterialFamily, Integer> entry : counts.entrySet()) {
+            if (entry.getValue() > dominantCount) {
+                dominant = entry.getKey();
+                dominantCount = entry.getValue();
+            }
+        }
+        return new NeighborInfluence(dominant, dominantCount);
+    }
+
+    private NetherMaterialFamily familyOf(Material material) {
+        return switch (material) {
+            case LAVA -> NetherMaterialFamily.LAVA;
+            case NETHERRACK -> NetherMaterialFamily.NETHERRACK;
+            case CRIMSON_NYLIUM -> NetherMaterialFamily.CRIMSON;
+            case WARPED_NYLIUM -> NetherMaterialFamily.WARPED;
+            case SOUL_SOIL, SOUL_SAND -> NetherMaterialFamily.SOUL;
+            case BLACKSTONE, BASALT -> NetherMaterialFamily.BASALT;
+            default -> null;
+        };
+    }
+
+    private Material soilPreference(NeighborInfluence influence, Random random) {
+        if (influence.family() == null) {
+            return null;
+        }
+        return switch (influence.family()) {
+            case NETHERRACK -> Material.NETHERRACK;
+            case CRIMSON -> Material.CRIMSON_NYLIUM;
+            case WARPED -> Material.WARPED_NYLIUM;
+            case SOUL -> random.nextInt(100) < 80 ? Material.SOUL_SOIL : Material.SOUL_SAND;
+            case BASALT -> random.nextInt(100) < 70 ? Material.BLACKSTONE : Material.BASALT;
+            case LAVA -> null;
+        };
+    }
+
+    private Material stonePreference(NeighborInfluence influence, Random random) {
+        if (influence.family() == null) {
+            return null;
+        }
+        return switch (influence.family()) {
+            case BASALT -> random.nextInt(100) < 65 ? Material.BASALT : Material.BLACKSTONE;
+            case SOUL -> random.nextInt(100) < 70 ? Material.NETHERRACK : Material.BLACKSTONE;
+            case CRIMSON, WARPED, NETHERRACK -> random.nextInt(100) < 80 ? Material.NETHERRACK : Material.BLACKSTONE;
+            case LAVA -> null;
+        };
+    }
+
+    private Material sandPreference(NeighborInfluence influence) {
+        if (influence.family() == null) {
+            return null;
+        }
+        return switch (influence.family()) {
+            case NETHERRACK, CRIMSON, WARPED -> Material.NETHERRACK;
+            case SOUL, BASALT -> Material.SOUL_SAND;
+            case LAVA -> null;
+        };
+    }
+
+    private Material gravelPreference(NeighborInfluence influence, Random random) {
+        if (influence.family() == null) {
+            return null;
+        }
+        return switch (influence.family()) {
+            case BASALT -> random.nextInt(100) < 65 ? Material.BLACKSTONE : Material.BASALT;
+            case NETHERRACK, CRIMSON, WARPED -> Material.NETHERRACK;
+            case SOUL -> random.nextInt(100) < 80 ? Material.SOUL_SOIL : Material.SOUL_SAND;
+            case LAVA -> null;
+        };
+    }
+
+    private Material weightedWithInfluence(Random random, Material preferred, NeighborInfluence influence, WeightedMaterial... materials) {
+        if (preferred == null || influence.count() <= 0) {
+            return weighted(random, materials);
+        }
+
+        WeightedMaterial[] influenced = new WeightedMaterial[materials.length + 1];
+        System.arraycopy(materials, 0, influenced, 0, materials.length);
+        influenced[materials.length] = weighted(preferred, Math.min(180, 70 + (influence.count() * 25)));
+        return weighted(random, influenced);
+    }
+
     private Material weighted(Random random, WeightedMaterial... materials) {
         int total = 0;
         for (WeightedMaterial material : materials) {
@@ -188,5 +303,17 @@ final class NetherTerrainMimic {
     }
 
     private record WeightedMaterial(Material material, int weight) {
+    }
+
+    private record NeighborInfluence(NetherMaterialFamily family, int count) {
+    }
+
+    private enum NetherMaterialFamily {
+        LAVA,
+        NETHERRACK,
+        CRIMSON,
+        WARPED,
+        SOUL,
+        BASALT
     }
 }

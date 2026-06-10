@@ -233,7 +233,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
             Block block = target.get();
             Material original = block.getType();
-            NetherMimicResult mimic = terrainMimic.mimic(block, source, random);
+            NetherMimicResult mimic = terrainMimic.mimic(block, source, random, nearbyCorruptionMaterials(world, block));
             if (mimic != null && mimic.material() != original) {
                 block.setType(mimic.material(), false);
                 frontierFor(source).add(block.getX(), block.getY(), block.getZ(), currentConfig.maxFrontierSize());
@@ -383,6 +383,38 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
                 || type == Material.BLACKSTONE
                 || type == Material.BASALT
                 || (type != Material.WATER && terrainMimic.canMimic(type));
+    }
+
+    private List<Material> nearbyCorruptionMaterials(World world, Block block) {
+        List<Material> materials = new ArrayList<>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (dx == 0 && dy == 0 && dz == 0) {
+                        continue;
+                    }
+
+                    int x = block.getX() + dx;
+                    int y = block.getY() + dy;
+                    int z = block.getZ() + dz;
+                    if (y < world.getMinHeight() || y >= world.getMaxHeight()) {
+                        continue;
+                    }
+
+                    int chunkX = x >> 4;
+                    int chunkZ = z >> 4;
+                    if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+                        continue;
+                    }
+
+                    Material type = world.getBlockAt(x, y, z).getType();
+                    if (terrainMimic.isCorruptionMaterial(type)) {
+                        materials.add(type);
+                    }
+                }
+            }
+        }
+        return materials;
     }
 
     private NetherSpreadFrontier frontierFor(PortalSource source) {
