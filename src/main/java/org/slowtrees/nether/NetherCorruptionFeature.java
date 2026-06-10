@@ -343,12 +343,46 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         int endY = Math.max(world.getMinHeight(), centerY - currentConfig.verticalRadius());
         for (int y = startY; y >= endY; y--) {
             Block block = world.getBlockAt(x, y, z);
-            if (terrainMimic.canMimic(block.getType())) {
+            if (terrainMimic.canMimic(block.getType()) && canSelectMimicTarget(world, block)) {
                 return Optional.of(block);
             }
         }
 
         return Optional.empty();
+    }
+
+    private boolean canSelectMimicTarget(World world, Block block) {
+        if (block.getType() != Material.WATER) {
+            return true;
+        }
+        return isWaterExpansionEdge(world, block);
+    }
+
+    private boolean isWaterExpansionEdge(World world, Block water) {
+        return isWaterExpansionNeighbor(world, water, 1, 0)
+                || isWaterExpansionNeighbor(world, water, -1, 0)
+                || isWaterExpansionNeighbor(world, water, 0, 1)
+                || isWaterExpansionNeighbor(world, water, 0, -1);
+    }
+
+    private boolean isWaterExpansionNeighbor(World world, Block water, int dx, int dz) {
+        int x = water.getX() + dx;
+        int z = water.getZ() + dz;
+        int chunkX = x >> 4;
+        int chunkZ = z >> 4;
+        if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+            return false;
+        }
+
+        Material type = world.getBlockAt(x, water.getY(), z).getType();
+        return type == Material.LAVA || type == Material.NETHERRACK
+                || type == Material.CRIMSON_NYLIUM
+                || type == Material.WARPED_NYLIUM
+                || type == Material.SOUL_SOIL
+                || type == Material.SOUL_SAND
+                || type == Material.BLACKSTONE
+                || type == Material.BASALT
+                || (type != Material.WATER && terrainMimic.canMimic(type));
     }
 
     private NetherSpreadFrontier frontierFor(PortalSource source) {
