@@ -81,6 +81,24 @@ mushroom-types:
   RED_MUSHROOM_BLOCK: RED_MUSHROOM
   BROWN_MUSHROOM_BLOCK: BROWN_MUSHROOM
 
+# Meadow growth lets natural surface life slowly spread outward. Dirt near
+# existing grass can become grass, grass can grow low/tall plants, and flowers
+# appear in small biome-aware clusters. It only touches natural surface blocks,
+# loaded chunks, current Folia regions, and nearby-player areas.
+meadow-growth:
+  enabled: true
+  step-ticks: 60
+  search-radius: 18
+  attempts-per-step: 32
+  blocks-per-step: 2
+  required-player-distance-chunks: 6
+  grass-spread-chance-percent: 75
+  plant-grow-chance-percent: 50
+  flower-chance-percent: 16
+  height-growth-chance-percent: 35
+  max-plants-per-area: 48
+  replace-leaf-litter: true
+
 # Nether corruption treats active Nether portals in the Overworld as sources
 # of slow terrain change. It does not use a configurable replacement map:
 # only internal vanilla-inspired natural block mimics are applied, and blocks

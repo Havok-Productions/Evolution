@@ -37,6 +37,16 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 - Keeps Nether mimic rules in code instead of exposing replacement maps.
 - Skips work when target chunks are unloaded, outside configured player distance, or outside the current Folia region.
 
+## Meadow Growth
+
+- Lets dirt-like natural ground become grass when it is near existing grass or meadow plants.
+- Lets grass blocks grow short grass, ferns, tall grass, large ferns, and biome-aware flowers.
+- Forms small flower clusters by biasing new flowers toward nearby flowers and stable biome patches.
+- Uses biome-aware flower choices for plains, forests, swamps, cherry groves, and meadows.
+- Can replace leaf litter so ground plants can reclaim the surface.
+- Avoids caves, liquids, player blocks, unloaded chunks, distant players, and non-owned Folia regions.
+- Uses world health mode by default, so meadow spread slows with the global natural growth multiplier.
+
 ## Wind
 
 - Represents wind through drifting leaves near tree canopies.
@@ -59,6 +69,7 @@ Other plugins can read SlowTrees state through `org.slowtrees.api.SlowTreesProvi
 ```java
 SlowTreesApi api = SlowTreesProvider.get();
 int queued = api.regrowth().queuedCount();
+long grass = api.meadow().grassBlocksSpread();
 boolean tracked = api.nether().registerPortalSourceNear(location, 32);
 WindSnapshot wind = api.wind().currentPattern();
 ```
@@ -67,6 +78,7 @@ The first API surface is intentionally small and stable:
 
 - Core: version, status lines, and reload.
 - Regrowth: queued, active, and decaying counts.
+- Meadow growth: grass, plant, and flower growth counters.
 - Nether corruption: source counts, changed block count, material checks, and existing-portal registration.
 - Wind: enabled state, particle/litter counters, and current wind pattern.
 

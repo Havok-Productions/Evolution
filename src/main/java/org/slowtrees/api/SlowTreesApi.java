@@ -11,6 +11,8 @@ public interface SlowTreesApi {
 
     RegrowthApi regrowth();
 
+    MeadowGrowthApi meadow();
+
     NetherCorruptionApi nether();
 
     WindApi wind();
