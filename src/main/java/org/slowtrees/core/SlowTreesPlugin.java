@@ -9,6 +9,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.event.Listener;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.slowtrees.ecology.EcologyEvolutionFeature;
 import org.slowtrees.meadow.MeadowGrowthFeature;
 import org.slowtrees.nether.NetherCorruptionFeature;
 import org.slowtrees.regrowth.PlantRegrowthFeature;
@@ -19,6 +20,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
     private ArchitecturePathDebug architecturePathDebug;
     private PlantRegrowthFeature regrowthFeature;
     private MeadowGrowthFeature meadowFeature;
+    private EcologyEvolutionFeature ecologyFeature;
     private NetherCorruptionFeature netherFeature;
     private WindFeature windFeature;
     private SlowTreesApi api;
@@ -35,10 +37,12 @@ public final class SlowTreesPlugin extends JavaPlugin {
         architecturePathDebug.trace(this, "core", "plugin.enable.start", "default config saved and merged");
         regrowthFeature = new PlantRegrowthFeature(this);
         meadowFeature = new MeadowGrowthFeature(this);
+        ecologyFeature = new EcologyEvolutionFeature(this);
         netherFeature = new NetherCorruptionFeature(this);
         windFeature = new WindFeature(this);
         registerFeature(regrowthFeature);
         registerFeature(meadowFeature);
+        registerFeature(ecologyFeature);
         registerFeature(netherFeature);
         registerFeature(windFeature);
         for (PluginFeature feature : features) {
@@ -128,6 +132,10 @@ public final class SlowTreesPlugin extends JavaPlugin {
 
     public MeadowGrowthFeature meadowFeature() {
         return meadowFeature;
+    }
+
+    public EcologyEvolutionFeature ecologyFeature() {
+        return ecologyFeature;
     }
 
     public NetherCorruptionFeature netherFeature() {

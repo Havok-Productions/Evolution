@@ -106,6 +106,28 @@ meadow-growth:
   max-plants-per-area: 48
   replace-leaf-litter: true
 
+# Ecology evolution is a gentle, long-term enrichment layer inspired by richer
+# biome/worldgen datapacks. It does not copy external assets: it slowly nudges
+# existing natural trees taller, adds occasional branches/canopy, and places
+# subtle forest-floor detail near loaded, player-visible trees.
+ecology-evolution:
+  enabled: true
+  step-ticks: 120
+  # 0 means use the server view distance in blocks.
+  search-radius: 0
+  attempts-per-step: 32
+  blocks-per-step: 1
+  required-player-distance-chunks: 6
+  height-chance-percent: 42
+  branch-chance-percent: 28
+  canopy-chance-percent: 50
+  forest-floor-chance-percent: 20
+  max-tree-height-bonus: 6
+  max-branches-near-tree: 6
+  debug:
+    recent-events: 120
+    map-radius: 8
+
 # Nether corruption treats active Nether portals in the Overworld as sources
 # of slow terrain change. It does not use a configurable replacement map:
 # only internal vanilla-inspired natural block mimics are applied, and blocks
