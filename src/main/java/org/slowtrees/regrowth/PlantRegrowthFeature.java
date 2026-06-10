@@ -141,20 +141,6 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             return;
         }
 
-        if (isDecayMaterial(block.getType()) && hasUpperStructuralBlock(block, 2)) {
-            plugin.pathDebug().trace(plugin, "regrowth", "break.upper-structural-gap",
-                    block.getType() + " at " + format(block.getLocation()) + " upper-log-within=2");
-            diagnostics.recordStructuralSuppression();
-            diagnostics.recordEvent("break.upper-structural-gap-suppress: " + block.getType()
-                    + " at " + format(block.getLocation()) + " upper-log-within=2");
-            diagnostics.saveSoon(plugin);
-            schedulePlantDecay(block, currentConfig);
-            if (cancelSameColumnRegrowth(block)) {
-                plugin.pathDebug().trace(plugin, "regrowth", "break.upper-structural-gap-cancel", format(block.getLocation()));
-            }
-            return;
-        }
-
         Optional<TreeType> treeType = currentConfig.treeTypeFor(block.getType());
         if (treeType.isEmpty()) {
             Optional<PendingRegrowth> pendingMushroom = createPendingMushroom(block, currentConfig);
@@ -378,7 +364,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
                 block.getType() + " at " + format(block.getLocation())
                         + " active=" + activeSummary(active)
                         + " structural=" + isDecayMaterial(block.getType()));
-        if (isDecayMaterial(block.getType())) {
+        if (isDecayMaterial(block.getType()) && isLowestConnectedPlantBlock(block)) {
             plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-structural-cancel",
                     block.getType() + " at " + format(block.getLocation()) + " tree=" + active.pending().treeType());
             diagnostics.recordStructuralSuppression();
@@ -718,19 +704,6 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private boolean isLowestConnectedPlantBlock(Block block) {
         return block.getY() <= block.getWorld().getMinHeight()
                 || block.getRelative(0, -1, 0).getType() != block.getType();
-    }
-
-    private boolean hasUpperStructuralBlock(Block block, int maxDistance) {
-        Material material = block.getType();
-        for (int offset = 1; offset <= maxDistance; offset++) {
-            if (block.getY() + offset > block.getWorld().getMaxHeight() - 1) {
-                return false;
-            }
-            if (block.getRelative(0, offset, 0).getType() == material) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private boolean areChunksLoaded(World world, int chunkX, int chunkZ, int radius) {
