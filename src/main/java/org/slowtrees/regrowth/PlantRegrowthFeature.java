@@ -38,6 +38,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private final ConcurrentMap<String, ActiveRegrowth> activeRegrowth = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> activeBlockKeys = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, PlantDecayPlan> activeDecay = new ConcurrentHashMap<>();
+    private final RegrowthDiagnostics diagnostics = new RegrowthDiagnostics();
     private volatile PlantRegrowthConfig config;
 
     public PlantRegrowthFeature(SlowTreesPlugin plugin) {
@@ -48,6 +49,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     @Override
     public void onEnable() {
+        diagnostics.saveNow(plugin);
         plugin.pathDebug().trace(plugin, "regrowth", "enable.load-queue", "loading queued plant regrowth");
         loadQueuedRegrowth();
     }
@@ -55,6 +57,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     @Override
     public void onDisable() {
         activeDecay.clear();
+        diagnostics.saveNow(plugin);
         saveQueuedRegrowth();
     }
 
@@ -95,6 +98,14 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         String brokenBlockKey = PendingRegrowth.keyFor(block);
         String activeKey = activeBlockKeys.get(brokenBlockKey);
         PendingRegrowth activePending = activeKey == null ? null : pendingRegrowth.get(activeKey);
+        diagnostics.recordBreak();
+        diagnostics.recordEvent("break.inspect: " + block.getType() + " at " + format(block.getLocation())
+                + " key=" + brokenBlockKey
+                + " active-key=" + valueOrNone(activeKey)
+                + " active-pending=" + formatOrNone(activePending)
+                + " pending-count=" + pendingRegrowth.size()
+                + " active-count=" + activeRegrowth.size());
+        diagnostics.saveSoon(plugin);
         plugin.pathDebug().trace(plugin, "regrowth", "break.inspect", block.getType() + " at " + format(block.getLocation()));
         plugin.pathDebug().trace(plugin, "regrowth", "break.inspect-detail",
                 "key=" + brokenBlockKey
@@ -118,12 +129,29 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
         if (isDecayMaterial(block.getType()) && isLowestConnectedPlantBlock(block)) {
             plugin.pathDebug().trace(plugin, "regrowth", "break.lowest-support", block.getType() + " at " + format(block.getLocation()));
+            diagnostics.recordStructuralSuppression();
+            diagnostics.recordEvent("break.lowest-support-suppress: " + block.getType() + " at " + format(block.getLocation()));
+            diagnostics.saveSoon(plugin);
             schedulePlantDecay(block, currentConfig);
             if (cancelSameColumnRegrowth(block)) {
                 plugin.pathDebug().trace(plugin, "regrowth", "break.lowest-support-cancel", format(block.getLocation()));
             }
             plugin.pathDebug().trace(plugin, "regrowth", "break.lowest-support-suppress-regrowth",
                     "no queue created for cut support at " + format(block.getLocation()));
+            return;
+        }
+
+        if (isDecayMaterial(block.getType()) && hasUpperStructuralBlock(block, 2)) {
+            plugin.pathDebug().trace(plugin, "regrowth", "break.upper-structural-gap",
+                    block.getType() + " at " + format(block.getLocation()) + " upper-log-within=2");
+            diagnostics.recordStructuralSuppression();
+            diagnostics.recordEvent("break.upper-structural-gap-suppress: " + block.getType()
+                    + " at " + format(block.getLocation()) + " upper-log-within=2");
+            diagnostics.saveSoon(plugin);
+            schedulePlantDecay(block, currentConfig);
+            if (cancelSameColumnRegrowth(block)) {
+                plugin.pathDebug().trace(plugin, "regrowth", "break.upper-structural-gap-cancel", format(block.getLocation()));
+            }
             return;
         }
 
@@ -146,6 +174,10 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
         plugin.pathDebug().trace(plugin, "regrowth", "break.upper-plant-queue",
                 block.getType() + " at " + format(block.getLocation()) + " base=" + format(baseBlock.getLocation()));
+        diagnostics.recordUpperQueue();
+        diagnostics.recordEvent("break.upper-plant-queue: " + block.getType()
+                + " at " + format(block.getLocation()) + " base=" + format(baseBlock.getLocation()));
+        diagnostics.saveSoon(plugin);
 
         PendingRegrowth pending = new PendingRegrowth(
                 baseBlock.getWorld().getUID(),
@@ -349,6 +381,10 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         if (isDecayMaterial(block.getType())) {
             plugin.pathDebug().trace(plugin, "regrowth", "break.interrupt-structural-cancel",
                     block.getType() + " at " + format(block.getLocation()) + " tree=" + active.pending().treeType());
+            diagnostics.recordStructuralSuppression();
+            diagnostics.recordEvent("break.interrupt-structural-cancel: " + block.getType()
+                    + " at " + format(block.getLocation()) + " active=" + activeSummary(active));
+            diagnostics.saveSoon(plugin);
             schedulePlantDecay(block, currentConfig);
             cancelRegrowth(active.pending());
             return true;
@@ -582,6 +618,11 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
                                 + " target=" + format(blocked.getLocation())
                                 + " current=" + blocked.getType()
                                 + " pending=" + format(pending));
+                diagnostics.recordPlacementBlocked();
+                diagnostics.recordEvent("place.skip-blocked: planned=" + state.getType()
+                        + " target=" + format(blocked.getLocation())
+                        + " current=" + blocked.getType()
+                        + " pending=" + format(pending));
                 continue;
             }
 
@@ -589,8 +630,12 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             markPlaced(active, state);
             plugin.pathDebug().trace(plugin, "regrowth", "place.block",
                     state.getType() + " at " + format(state.getLocation()) + " pending=" + format(pending));
+            diagnostics.recordPlaced();
+            diagnostics.recordEvent("place.block: " + state.getType()
+                    + " at " + format(state.getLocation()) + " pending=" + format(pending));
             placed++;
         }
+        diagnostics.saveSoon(plugin);
 
         if (active.isFinished()) {
             plugin.pathDebug().trace(plugin, "regrowth", "place.done", pending.treeType() + " at " + format(location));
@@ -673,6 +718,19 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private boolean isLowestConnectedPlantBlock(Block block) {
         return block.getY() <= block.getWorld().getMinHeight()
                 || block.getRelative(0, -1, 0).getType() != block.getType();
+    }
+
+    private boolean hasUpperStructuralBlock(Block block, int maxDistance) {
+        Material material = block.getType();
+        for (int offset = 1; offset <= maxDistance; offset++) {
+            if (block.getY() + offset > block.getWorld().getMaxHeight() - 1) {
+                return false;
+            }
+            if (block.getRelative(0, offset, 0).getType() == material) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean areChunksLoaded(World world, int chunkX, int chunkZ, int radius) {
