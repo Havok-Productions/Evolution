@@ -7,7 +7,7 @@ description: Folia-safe natural regrowth and Nether portal corruption.
 commands:
   slowtrees:
     description: Manage SlowTrees.
-    usage: /slowtrees <reload|status|pending>
+    usage: /slowtrees <reload|status|pending|tree>
     permission: slowtrees.admin
 permissions:
   slowtrees.admin:

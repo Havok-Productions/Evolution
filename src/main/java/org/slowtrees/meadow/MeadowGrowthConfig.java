@@ -6,6 +6,7 @@ import java.util.Locale;
 import java.util.Set;
 import org.bukkit.World;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.slowtrees.core.RuntimeProfile;
 import org.slowtrees.core.SlowTreesPlugin;
 
 final class MeadowGrowthConfig {
@@ -21,6 +22,10 @@ final class MeadowGrowthConfig {
     private final int heightGrowthChancePercent;
     private final int maxPlantsPerArea;
     private final boolean replaceLeafLitter;
+    private final boolean testingEnabled;
+    private final long testingStepTicks;
+    private final int testingAttemptsPerStep;
+    private final int testingBlocksPerStep;
     private final boolean worldHealthModeEnabled;
     private final double worldHealthGrowthSpeedMultiplier;
     private final Set<String> enabledWorlds;
@@ -39,6 +44,10 @@ final class MeadowGrowthConfig {
             int heightGrowthChancePercent,
             int maxPlantsPerArea,
             boolean replaceLeafLitter,
+            boolean testingEnabled,
+            long testingStepTicks,
+            int testingAttemptsPerStep,
+            int testingBlocksPerStep,
             boolean worldHealthModeEnabled,
             double worldHealthGrowthSpeedMultiplier,
             Set<String> enabledWorlds,
@@ -56,6 +65,10 @@ final class MeadowGrowthConfig {
         this.heightGrowthChancePercent = heightGrowthChancePercent;
         this.maxPlantsPerArea = maxPlantsPerArea;
         this.replaceLeafLitter = replaceLeafLitter;
+        this.testingEnabled = testingEnabled;
+        this.testingStepTicks = testingStepTicks;
+        this.testingAttemptsPerStep = testingAttemptsPerStep;
+        this.testingBlocksPerStep = testingBlocksPerStep;
         this.worldHealthModeEnabled = worldHealthModeEnabled;
         this.worldHealthGrowthSpeedMultiplier = worldHealthGrowthSpeedMultiplier;
         this.enabledWorlds = enabledWorlds;
@@ -68,6 +81,7 @@ final class MeadowGrowthConfig {
         int effectiveSearchRadius = configuredSearchRadius == 0
                 ? Math.max(16, plugin.getServer().getViewDistance() * 16)
                 : configuredSearchRadius;
+        boolean testing = RuntimeProfile.testingEnabled(config) && config.getBoolean("meadow-growth.testing.enabled", true);
         return new MeadowGrowthConfig(
                 config.getBoolean("meadow-growth.enabled", true),
                 Math.max(20L, config.getLong("meadow-growth.step-ticks", 60L)),
@@ -81,6 +95,10 @@ final class MeadowGrowthConfig {
                 percent(config.getInt("meadow-growth.height-growth-chance-percent", 35)),
                 Math.max(0, config.getInt("meadow-growth.max-plants-per-area", 48)),
                 config.getBoolean("meadow-growth.replace-leaf-litter", true),
+                testing,
+                Math.max(5L, config.getLong("meadow-growth.testing.step-ticks", 10L)),
+                Math.max(1, config.getInt("meadow-growth.testing.attempts-per-step", 128)),
+                Math.max(1, config.getInt("meadow-growth.testing.blocks-per-step", 8)),
                 config.getBoolean("world-health-mode.enabled", true),
                 sanitizeGrowthSpeedMultiplier(config.getDouble("world-health-mode.growth-speed-multiplier", 0.15D)),
                 normalizeWorldNames(config.getStringList("enabled-worlds")),
@@ -93,6 +111,9 @@ final class MeadowGrowthConfig {
     }
 
     long stepTicks() {
+        if (testingEnabled) {
+            return testingStepTicks;
+        }
         if (!worldHealthModeEnabled) {
             return stepTicks;
         }
@@ -104,11 +125,11 @@ final class MeadowGrowthConfig {
     }
 
     int attemptsPerStep() {
-        return attemptsPerStep;
+        return testingEnabled ? testingAttemptsPerStep : attemptsPerStep;
     }
 
     int blocksPerStep() {
-        return blocksPerStep;
+        return testingEnabled ? testingBlocksPerStep : blocksPerStep;
     }
 
     int requiredPlayerDistanceChunks() {
@@ -156,7 +177,8 @@ final class MeadowGrowthConfig {
                 + ", grass=" + grassSpreadChancePercent
                 + ", plants=" + plantGrowChancePercent
                 + ", flowers=" + flowerChancePercent
-                + ", height=" + heightGrowthChancePercent;
+                + ", height=" + heightGrowthChancePercent
+                + ", testing=" + testingEnabled;
     }
 
     private static int percent(int value) {

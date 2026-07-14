@@ -16,4 +16,6 @@ public interface SlowTreesApi {
     NetherCorruptionApi nether();
 
     WindApi wind();
+
+    TreeEvolutionApi treeEvolution();
 }

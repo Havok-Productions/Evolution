@@ -30,6 +30,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.slowtrees.core.PluginFeature;
+import org.slowtrees.core.ResourceReporter.ReportSample;
 import org.slowtrees.core.SlowTreesPlugin;
 
 public final class PlantRegrowthFeature implements PluginFeature, Listener {
@@ -88,12 +89,14 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
-        Block block = event.getBlock();
-        PlantRegrowthConfig currentConfig = config;
-        if (!currentConfig.isWorldAllowed(block.getWorld())) {
-            plugin.pathDebug().trace(plugin, "regrowth", "break.skip.world-disabled", format(block.getLocation()));
-            return;
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("regrowth", "event.block-break")) {
+            Block block = event.getBlock();
+            PlantRegrowthConfig currentConfig = config;
+            if (!currentConfig.isWorldAllowed(block.getWorld())) {
+                plugin.pathDebug().trace(plugin, "regrowth", "break.skip.world-disabled", format(block.getLocation()));
+                sample.detail("world-disabled " + block.getType());
+                return;
+            }
 
         String brokenBlockKey = PendingRegrowth.keyFor(block);
         String activeKey = activeBlockKeys.get(brokenBlockKey);
@@ -177,6 +180,8 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         );
 
         queueRegrowth(pending, currentConfig);
+        sample.changedUnits(1).detail("queued " + block.getType() + " at " + format(block.getLocation()));
+        }
     }
 
     private void queueRegrowth(PendingRegrowth pending, PlantRegrowthConfig currentConfig) {
@@ -291,48 +296,56 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     }
 
     private void runPlantDecay(String key, Location location, PlantDecayPlan plan) {
-        PlantRegrowthConfig currentConfig = config;
-        World world = location.getWorld();
-        if (world == null || !currentConfig.plantDecayEnabled()) {
-            plugin.pathDebug().trace(plugin, "regrowth", "decay.cancel", "world missing or disabled");
-            activeDecay.remove(key, plan);
-            return;
-        }
-
-        if (!canWorkAt(location, currentConfig)) {
-            plugin.pathDebug().trace(plugin, "regrowth", "decay.wait", format(location));
-            schedulePlantDecayStep(key, location, plan, currentConfig.retryDelayTicks());
-            return;
-        }
-
-        int removed = 0;
-        while (removed < currentConfig.plantDecayBlocksPerStep() && !plan.isFinished()) {
-            PlantDecayPlan.DecayBlock next = plan.peekNext();
-            if (next == null) {
-                break;
-            }
-            if (!isDecayBlockLoadedAndOwned(world, next)) {
-                plugin.pathDebug().failure(plugin, "regrowth", "chunk-or-region-gate", "decay block " + next.x() + "," + next.y() + "," + next.z());
-                schedulePlantDecayStep(key, location, plan, currentConfig.retryDelayTicks());
+        try (ReportSample sample = plugin.resourceReporter().begin("regrowth", "tick.plant-decay")) {
+            PlantRegrowthConfig currentConfig = config;
+            World world = location.getWorld();
+            if (world == null || !currentConfig.plantDecayEnabled()) {
+                plugin.pathDebug().trace(plugin, "regrowth", "decay.cancel", "world missing or disabled");
+                activeDecay.remove(key, plan);
+                sample.detail("world-missing-or-disabled");
                 return;
             }
 
-            Block block = world.getBlockAt(next.x(), next.y(), next.z());
-            plan.removeNext();
-            if (block.getType() == plan.originalMaterial()) {
-                block.setType(Material.AIR, false);
-                plugin.pathDebug().trace(plugin, "regrowth", "decay.remove-block", format(block.getLocation()));
-                removed++;
+            if (!canWorkAt(location, currentConfig)) {
+                plugin.pathDebug().trace(plugin, "regrowth", "decay.wait", format(location));
+                schedulePlantDecayStep(key, location, plan, currentConfig.retryDelayTicks());
+                sample.detail("wait-cannot-work " + format(location));
+                return;
             }
-        }
 
-        if (plan.isFinished()) {
-            plugin.pathDebug().trace(plugin, "regrowth", "decay.done", format(location));
-            activeDecay.remove(key, plan);
-            return;
-        }
+            int removed = 0;
+            int inspected = 0;
+            while (removed < currentConfig.plantDecayBlocksPerStep() && !plan.isFinished()) {
+                PlantDecayPlan.DecayBlock next = plan.peekNext();
+                if (next == null) {
+                    break;
+                }
+                inspected++;
+                if (!isDecayBlockLoadedAndOwned(world, next)) {
+                    plugin.pathDebug().failure(plugin, "regrowth", "chunk-or-region-gate", "decay block " + next.x() + "," + next.y() + "," + next.z());
+                    schedulePlantDecayStep(key, location, plan, currentConfig.retryDelayTicks());
+                    sample.workUnits(inspected).detail("chunk-or-region");
+                    return;
+                }
 
-        schedulePlantDecayStep(key, location, plan, currentConfig.plantDecayStepTicks());
+                Block block = world.getBlockAt(next.x(), next.y(), next.z());
+                plan.removeNext();
+                if (block.getType() == plan.originalMaterial()) {
+                    block.setType(Material.AIR, false);
+                    plugin.pathDebug().trace(plugin, "regrowth", "decay.remove-block", format(block.getLocation()));
+                    removed++;
+                }
+            }
+
+            sample.workUnits(inspected).changedUnits(removed).detail("removed=" + removed + " at " + format(location));
+            if (plan.isFinished()) {
+                plugin.pathDebug().trace(plugin, "regrowth", "decay.done", format(location));
+                activeDecay.remove(key, plan);
+                return;
+            }
+
+            schedulePlantDecayStep(key, location, plan, currentConfig.plantDecayStepTicks());
+        }
     }
 
     private void schedulePlantDecayStep(String key, Location location, PlantDecayPlan plan, long delayTicks) {
@@ -451,25 +464,30 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     }
 
     private void saveQueuedRegrowth() {
-        plugin.pathDebug().trace(plugin, "regrowth", "persistence.save", "queued-regrowth.yml entries=" + pendingRegrowth.size());
-        YamlConfiguration yaml = new YamlConfiguration();
-        ConfigurationSection trees = yaml.createSection("trees");
-        int index = 0;
-        for (PendingRegrowth pending : pendingRegrowth.values()) {
-            pending.writeTo(trees.createSection(Integer.toString(index++)));
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("regrowth", "persistence.save-queue")) {
+            plugin.pathDebug().trace(plugin, "regrowth", "persistence.save", "queued-regrowth.yml entries=" + pendingRegrowth.size());
+            YamlConfiguration yaml = new YamlConfiguration();
+            ConfigurationSection trees = yaml.createSection("trees");
+            int index = 0;
+            for (PendingRegrowth pending : pendingRegrowth.values()) {
+                pending.writeTo(trees.createSection(Integer.toString(index++)));
+            }
 
-        File file = queueFile();
-        File parent = file.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs()) {
-            plugin.getLogger().warning("Could not create plugin data folder for plant regrowth storage.");
-            return;
-        }
+            File file = queueFile();
+            File parent = file.getParentFile();
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                plugin.getLogger().warning("Could not create plugin data folder for plant regrowth storage.");
+                sample.detail("folder-create-failed entries=" + pendingRegrowth.size());
+                return;
+            }
 
-        try {
-            yaml.save(file);
-        } catch (IOException ex) {
-            plugin.getLogger().log(Level.WARNING, "Could not save queued plant regrowth.", ex);
+            try {
+                yaml.save(file);
+                sample.workUnits(pendingRegrowth.size()).changedUnits(1).detail("entries=" + pendingRegrowth.size());
+            } catch (IOException ex) {
+                sample.detail("failed entries=" + pendingRegrowth.size() + " " + ex.getClass().getSimpleName());
+                plugin.getLogger().log(Level.WARNING, "Could not save queued plant regrowth.", ex);
+            }
         }
     }
 
@@ -492,155 +510,177 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     }
 
     private void attemptRegrowth(PendingRegrowth pending) {
-        PlantRegrowthConfig currentConfig = config;
-        World world = pending.world();
-        if (world == null || !currentConfig.isWorldAllowed(world)) {
-            plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-world-disabled", pending.treeType().name());
-            plugin.pathDebug().failure(plugin, "regrowth", "world-disabled", pending.treeType().name());
-            removeRegrowth(pending);
-            return;
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("regrowth", "tick.attempt-regrowth")) {
+            PlantRegrowthConfig currentConfig = config;
+            World world = pending.world();
+            if (world == null || !currentConfig.isWorldAllowed(world)) {
+                plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-world-disabled", pending.treeType().name());
+                plugin.pathDebug().failure(plugin, "regrowth", "world-disabled", pending.treeType().name());
+                removeRegrowth(pending);
+                sample.detail("world-disabled " + pending.treeType());
+                return;
+            }
 
-        Location location = pending.location(world);
-        if (!canWorkAt(location, currentConfig)) {
-            plugin.pathDebug().trace(plugin, "regrowth", "attempt.wait-cannot-work", format(location));
-            retryLater(pending);
-            return;
-        }
+            Location location = pending.location(world);
+            if (!canWorkAt(location, currentConfig)) {
+                plugin.pathDebug().trace(plugin, "regrowth", "attempt.wait-cannot-work", format(location));
+                retryLater(pending);
+                sample.detail("wait-cannot-work " + format(location));
+                return;
+            }
 
-        if (!hasAnchorBlock(location, pending)) {
-            plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-missing-anchor", format(location));
-            plugin.pathDebug().failure(plugin, "regrowth", "missing-anchor", format(location));
-            removeRegrowth(pending);
-            return;
-        }
+            if (!hasAnchorBlock(location, pending)) {
+                plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-missing-anchor", format(location));
+                plugin.pathDebug().failure(plugin, "regrowth", "missing-anchor", format(location));
+                removeRegrowth(pending);
+                sample.detail("missing-anchor " + format(location));
+                return;
+            }
 
-        Deque<BlockState> plannedBlocks = planStructure(location, pending.treeType(), pending.seed(), currentConfig);
-        if (plannedBlocks.isEmpty()) {
-            plugin.pathDebug().trace(plugin, "regrowth", "attempt.retry-empty-plan", pending.treeType() + " at " + format(location));
-            retryLater(pending);
-            return;
-        }
+            Deque<BlockState> plannedBlocks = planStructure(location, pending.treeType(), pending.seed(), currentConfig);
+            if (plannedBlocks.isEmpty()) {
+                plugin.pathDebug().trace(plugin, "regrowth", "attempt.retry-empty-plan", pending.treeType() + " at " + format(location));
+                retryLater(pending);
+                sample.detail("empty-plan " + pending.treeType());
+                return;
+            }
 
-        ActiveRegrowth active = new ActiveRegrowth(pending, plannedBlocks);
-        activeRegrowth.put(pending.key(), active);
-        plugin.pathDebug().trace(plugin, "regrowth", "attempt.active-start", pending.treeType() + " blocks=" + plannedBlocks.size());
-        placeNextBatch(active);
+            ActiveRegrowth active = new ActiveRegrowth(pending, plannedBlocks);
+            activeRegrowth.put(pending.key(), active);
+            plugin.pathDebug().trace(plugin, "regrowth", "attempt.active-start", pending.treeType() + " blocks=" + plannedBlocks.size());
+            sample.workUnits(plannedBlocks.size()).changedUnits(1).detail("active-start " + pending.treeType() + " blocks=" + plannedBlocks.size());
+            placeNextBatch(active);
+        }
     }
 
     private Deque<BlockState> planStructure(Location location, TreeType treeType, long seed, PlantRegrowthConfig currentConfig) {
-        List<BlockState> generatedStates = new ArrayList<>();
-        try {
-            location.getWorld().generateTree(location, new Random(seed), treeType, state -> {
-                generatedStates.add(state);
-                return false;
-            });
-        } catch (RuntimeException ex) {
-            plugin.getLogger().fine("Structure generation failed at " + format(location) + ": " + ex.getMessage());
-            return new ArrayDeque<>();
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("regrowth", "plan.generate-structure")) {
+            List<BlockState> generatedStates = new ArrayList<>();
+            try {
+                location.getWorld().generateTree(location, new Random(seed), treeType, state -> {
+                    generatedStates.add(state);
+                    return false;
+                });
+            } catch (RuntimeException ex) {
+                plugin.getLogger().fine("Structure generation failed at " + format(location) + ": " + ex.getMessage());
+                sample.detail("failed " + treeType + " " + ex.getClass().getSimpleName());
+                return new ArrayDeque<>();
+            }
 
-        generatedStates.removeIf(state -> !canPlace(state, currentConfig));
-        generatedStates.sort(Comparator.comparingInt(PlantRegrowthFeature::growthPriority));
-        return new ArrayDeque<>(generatedStates);
+            int generated = generatedStates.size();
+            generatedStates.removeIf(state -> !canPlace(state, currentConfig));
+            generatedStates.sort(Comparator.comparingInt(PlantRegrowthFeature::growthPriority));
+            sample.workUnits(generated).changedUnits(generatedStates.size()).detail(treeType + " generated=" + generated + " placeable=" + generatedStates.size());
+            return new ArrayDeque<>(generatedStates);
+        }
     }
 
     private void placeNextBatch(ActiveRegrowth active) {
-        PendingRegrowth pending = active.pending();
-        if (!isCurrentActiveRegrowth(active)) {
-            plugin.pathDebug().trace(plugin, "regrowth", "place.skip-stale-active",
-                    pending.treeType() + " at " + format(pending));
-            return;
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("regrowth", "tick.place-next-batch")) {
+            PendingRegrowth pending = active.pending();
+            if (!isCurrentActiveRegrowth(active)) {
+                plugin.pathDebug().trace(plugin, "regrowth", "place.skip-stale-active",
+                        pending.treeType() + " at " + format(pending));
+                sample.detail("stale-active " + pending.treeType());
+                return;
+            }
 
-        World world = pending.world();
-        if (world == null) {
-            removeRegrowth(pending);
-            return;
-        }
+            World world = pending.world();
+            if (world == null) {
+                removeRegrowth(pending);
+                sample.detail("missing-world " + pending.treeType());
+                return;
+            }
 
-        PlantRegrowthConfig currentConfig = config;
-        Location location = pending.location(world);
-        long remainingCooldownTicks = active.remainingCooldownTicks();
-        if (remainingCooldownTicks > 0L) {
-            plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "growth-cooldown delay=" + remainingCooldownTicks);
+            PlantRegrowthConfig currentConfig = config;
+            Location location = pending.location(world);
+            long remainingCooldownTicks = active.remainingCooldownTicks();
+            if (remainingCooldownTicks > 0L) {
+                plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "growth-cooldown delay=" + remainingCooldownTicks);
+                Bukkit.getRegionScheduler().runDelayed(
+                        plugin,
+                        location,
+                        task -> placeNextBatch(active),
+                        remainingCooldownTicks
+                );
+                sample.detail("cooldown ticks=" + remainingCooldownTicks);
+                return;
+            }
+
+            if (!canWorkAt(location, currentConfig)) {
+                plugin.pathDebug().trace(plugin, "regrowth", "place.wait-cannot-work", format(location));
+                plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "place-retry delay=" + currentConfig.retryDelayTicks());
+                Bukkit.getRegionScheduler().runDelayed(
+                        plugin,
+                        location,
+                        task -> placeNextBatch(active),
+                        currentConfig.retryDelayTicks()
+                );
+                sample.detail("wait-cannot-work " + format(location));
+                return;
+            }
+
+            if (!hasAnchorBlock(location, pending)) {
+                plugin.pathDebug().failure(plugin, "regrowth", "missing-anchor", format(location));
+                removeRegrowth(pending);
+                sample.detail("missing-anchor " + format(location));
+                return;
+            }
+
+            int placed = 0;
+            int inspected = 0;
+            while (placed < currentConfig.blocksPerGrowthStep() && !active.isFinished()) {
+                BlockState state = active.pollNextBlock();
+                if (state == null) {
+                    continue;
+                }
+                inspected++;
+                if (!canPlace(state, currentConfig)) {
+                    Block blocked = state.getBlock();
+                    plugin.pathDebug().trace(plugin, "regrowth", "place.skip-blocked",
+                            "planned=" + state.getType()
+                                    + " target=" + format(blocked.getLocation())
+                                    + " current=" + blocked.getType()
+                                    + " pending=" + format(pending));
+                    diagnostics.recordPlacementBlocked();
+                    diagnostics.recordEvent("place.skip-blocked: planned=" + state.getType()
+                            + " target=" + format(blocked.getLocation())
+                            + " current=" + blocked.getType()
+                            + " pending=" + format(pending));
+                    continue;
+                }
+
+                state.update(true, false);
+                markPlaced(active, state);
+                plugin.pathDebug().trace(plugin, "regrowth", "place.block",
+                        state.getType() + " at " + format(state.getLocation()) + " pending=" + format(pending));
+                diagnostics.recordPlaced();
+                diagnostics.recordEvent("place.block: " + state.getType()
+                        + " at " + format(state.getLocation()) + " pending=" + format(pending));
+                placed++;
+            }
+            diagnostics.saveSoon(plugin);
+
+            sample.workUnits(inspected).changedUnits(placed).detail(pending.treeType() + " placed=" + placed + " at " + format(location));
+            if (active.isFinished()) {
+                plugin.pathDebug().trace(plugin, "regrowth", "place.done", pending.treeType() + " at " + format(location));
+                finishRegrowth(pending);
+                return;
+            }
+
+            long nextGrowthDelay = currentConfig.growthStepTicks(active.placedBlockCount());
+            plugin.pathDebug().trace(plugin, "regrowth", "place.batch", pending.treeType()
+                    + " placed=" + placed
+                    + " total-placed=" + active.placedBlockCount()
+                    + " at " + format(location));
+            plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "place-next delay=" + nextGrowthDelay);
             Bukkit.getRegionScheduler().runDelayed(
                     plugin,
                     location,
                     task -> placeNextBatch(active),
-                    remainingCooldownTicks
+                    nextGrowthDelay
             );
-            return;
         }
-
-        if (!canWorkAt(location, currentConfig)) {
-            plugin.pathDebug().trace(plugin, "regrowth", "place.wait-cannot-work", format(location));
-            plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "place-retry delay=" + currentConfig.retryDelayTicks());
-            Bukkit.getRegionScheduler().runDelayed(
-                    plugin,
-                    location,
-                    task -> placeNextBatch(active),
-                    currentConfig.retryDelayTicks()
-            );
-            return;
-        }
-
-        if (!hasAnchorBlock(location, pending)) {
-            plugin.pathDebug().failure(plugin, "regrowth", "missing-anchor", format(location));
-            removeRegrowth(pending);
-            return;
-        }
-
-        int placed = 0;
-        while (placed < currentConfig.blocksPerGrowthStep() && !active.isFinished()) {
-            BlockState state = active.pollNextBlock();
-            if (state == null) {
-                continue;
-            }
-            if (!canPlace(state, currentConfig)) {
-                Block blocked = state.getBlock();
-                plugin.pathDebug().trace(plugin, "regrowth", "place.skip-blocked",
-                        "planned=" + state.getType()
-                                + " target=" + format(blocked.getLocation())
-                                + " current=" + blocked.getType()
-                                + " pending=" + format(pending));
-                diagnostics.recordPlacementBlocked();
-                diagnostics.recordEvent("place.skip-blocked: planned=" + state.getType()
-                        + " target=" + format(blocked.getLocation())
-                        + " current=" + blocked.getType()
-                        + " pending=" + format(pending));
-                continue;
-            }
-
-            state.update(true, false);
-            markPlaced(active, state);
-            plugin.pathDebug().trace(plugin, "regrowth", "place.block",
-                    state.getType() + " at " + format(state.getLocation()) + " pending=" + format(pending));
-            diagnostics.recordPlaced();
-            diagnostics.recordEvent("place.block: " + state.getType()
-                    + " at " + format(state.getLocation()) + " pending=" + format(pending));
-            placed++;
-        }
-        diagnostics.saveSoon(plugin);
-
-        if (active.isFinished()) {
-            plugin.pathDebug().trace(plugin, "regrowth", "place.done", pending.treeType() + " at " + format(location));
-            finishRegrowth(pending);
-            return;
-        }
-
-        long nextGrowthDelay = currentConfig.growthStepTicks(active.placedBlockCount());
-        plugin.pathDebug().trace(plugin, "regrowth", "place.batch", pending.treeType()
-                + " placed=" + placed
-                + " total-placed=" + active.placedBlockCount()
-                + " at " + format(location));
-        plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "place-next delay=" + nextGrowthDelay);
-        Bukkit.getRegionScheduler().runDelayed(
-                plugin,
-                location,
-                task -> placeNextBatch(active),
-                nextGrowthDelay
-        );
     }
 
     private boolean isCurrentActiveRegrowth(ActiveRegrowth active) {

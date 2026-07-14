@@ -31,6 +31,7 @@ import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.world.PortalCreateEvent;
 import org.slowtrees.core.PluginFeature;
+import org.slowtrees.core.ResourceReporter.ReportSample;
 import org.slowtrees.core.SlowTreesPlugin;
 
 public final class NetherCorruptionFeature implements PluginFeature, Listener {
@@ -38,6 +39,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     private final ConcurrentMap<String, PortalSource> sources = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, NetherSpreadFrontier> frontiers = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> nextPortalScanMillis = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> negativePortalScanCache = new ConcurrentHashMap<>();
     private final NetherTerrainMimic terrainMimic = new NetherTerrainMimic();
     private final NetherMapDebug mapDebug = new NetherMapDebug();
     private final Random random = new Random();
@@ -61,6 +63,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     @Override
     public void onDisable() {
         nextPortalScanMillis.clear();
+        negativePortalScanCache.clear();
         plugin.pathDebug().trace(plugin, "nether", "persistence.save-map-debug.now", "MapDebug.yml");
         mapDebug.saveNow(plugin);
         saveSources();
@@ -121,32 +124,49 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerMove(PlayerMoveEvent event) {
-        NetherCorruptionConfig currentConfig = config;
-        Location location = event.getTo();
-        World world = location.getWorld();
-        if (!currentConfig.enabled() || world == null || world.getEnvironment() != World.Environment.NORMAL) {
-            plugin.pathDebug().trace(plugin, "nether", "portal-scan.skip", "enabled=" + currentConfig.enabled()
-                    + " world=" + (world == null ? "none" : world.getEnvironment()));
-            return;
-        }
-
-        String key = event.getPlayer().getUniqueId().toString();
-        long now = System.currentTimeMillis();
-        long nextScan = nextPortalScanMillis.getOrDefault(key, 0L);
-        if (now < nextScan) {
-            plugin.pathDebug().traceSampled(plugin, "nether", "portal-scan.skip.cooldown", "remaining-ms=" + (nextScan - now));
-            return;
-        }
-
-        nextPortalScanMillis.put(key, now + 5000L);
-        plugin.pathDebug().trace(plugin, "nether", "portal-scan.start", "radius=" + currentConfig.playerPortalScanRadius());
-        findNearbyPortalBlock(location, currentConfig.playerPortalScanRadius()).ifPresent(block -> {
-            List<Block> portalBlocks = findConnectedPortalBlocks(block);
-            plugin.pathDebug().trace(plugin, "nether", "portal-scan.portal-found", "blocks=" + portalBlocks.size() + " at " + format(block));
-            if (!portalBlocks.isEmpty()) {
-                queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
+        try (ReportSample sample = plugin.resourceReporter().begin("nether", "event.player-move-portal-scan")) {
+            NetherCorruptionConfig currentConfig = config;
+            Location location = event.getTo();
+            World world = location.getWorld();
+            if (!currentConfig.enabled() || world == null || world.getEnvironment() != World.Environment.NORMAL) {
+                plugin.pathDebug().trace(plugin, "nether", "portal-scan.skip", "enabled=" + currentConfig.enabled()
+                        + " world=" + (world == null ? "none" : world.getEnvironment()));
+                sample.detail("disabled-or-environment");
+                return;
             }
-        });
+
+            String key = event.getPlayer().getUniqueId().toString();
+            long now = System.currentTimeMillis();
+            long nextScan = nextPortalScanMillis.getOrDefault(key, 0L);
+            if (now < nextScan) {
+                plugin.pathDebug().traceSampled(plugin, "nether", "portal-scan.skip.cooldown", "remaining-ms=" + (nextScan - now));
+                sample.detail("cooldown");
+                return;
+            }
+
+            nextPortalScanMillis.put(key, now + currentConfig.portalScanCooldownMillis());
+            String negativeKey = portalNegativeCacheKey(location, currentConfig.playerPortalScanRadius());
+            long negativeExpires = negativePortalScanCache.getOrDefault(negativeKey, 0L);
+            if (now < negativeExpires) {
+                plugin.pathDebug().traceSampled(plugin, "nether", "portal-scan.skip.negative-cache",
+                        negativeKey + " remaining-ms=" + (negativeExpires - now));
+                sample.detail("negative-cache " + negativeKey);
+                return;
+            }
+            plugin.pathDebug().trace(plugin, "nether", "portal-scan.start", "radius=" + currentConfig.playerPortalScanRadius());
+            Optional<Block> portal = findNearbyPortalBlock(location, currentConfig.playerPortalScanRadius());
+            if (portal.isPresent()) {
+                List<Block> portalBlocks = findConnectedPortalBlocks(portal.get());
+                plugin.pathDebug().trace(plugin, "nether", "portal-scan.portal-found", "blocks=" + portalBlocks.size() + " at " + format(portal.get()));
+                if (!portalBlocks.isEmpty()) {
+                    queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
+                }
+                sample.changedUnits(portalBlocks.isEmpty() ? 0L : 1L).workUnits(portalBlocks.size()).detail("portal-found blocks=" + portalBlocks.size());
+            } else {
+                negativePortalScanCache.put(negativeKey, now + currentConfig.portalNegativeCacheMillis());
+                sample.detail("portal-none radius=" + currentConfig.playerPortalScanRadius());
+            }
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -233,67 +253,76 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     }
 
     private void spreadFrom(PortalSource source) {
-        NetherCorruptionConfig currentConfig = config;
-        if (!currentConfig.enabled() || !sources.containsKey(source.key())) {
-            plugin.pathDebug().trace(plugin, "nether", "spread.skip.disabled-or-untracked", source.shortDescription());
-            return;
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("nether", "tick.spread-from-source")) {
+            NetherCorruptionConfig currentConfig = config;
+            if (!currentConfig.enabled() || !sources.containsKey(source.key())) {
+                plugin.pathDebug().trace(plugin, "nether", "spread.skip.disabled-or-untracked", source.shortDescription());
+                sample.detail("disabled-or-untracked " + source.shortDescription());
+                return;
+            }
 
-        World world = source.world();
-        if (world == null) {
-            plugin.pathDebug().trace(plugin, "nether", "spread.remove.missing-world", source.shortDescription());
-            plugin.pathDebug().failure(plugin, "nether", "missing-world", source.shortDescription());
-            sources.remove(source.key());
-            frontiers.remove(source.key());
-            saveSources();
-            return;
-        }
+            World world = source.world();
+            if (world == null) {
+                plugin.pathDebug().trace(plugin, "nether", "spread.remove.missing-world", source.shortDescription());
+                plugin.pathDebug().failure(plugin, "nether", "missing-world", source.shortDescription());
+                sources.remove(source.key());
+                frontiers.remove(source.key());
+                saveSources();
+                sample.detail("missing-world");
+                return;
+            }
 
-        SourceState state = sourceState(source, world, currentConfig);
-        if (state == SourceState.GONE) {
-            plugin.pathDebug().trace(plugin, "nether", "spread.remove.portal-gone", source.shortDescription());
-            plugin.pathDebug().failure(plugin, "nether", "missing-portal", source.shortDescription());
-            sources.remove(source.key());
-            frontiers.remove(source.key());
-            saveSources();
-            return;
-        }
-        if (state == SourceState.WAIT) {
-            plugin.pathDebug().trace(plugin, "nether", "spread.wait", source.shortDescription());
+            SourceState state = sourceState(source, world, currentConfig);
+            if (state == SourceState.GONE) {
+                plugin.pathDebug().trace(plugin, "nether", "spread.remove.portal-gone", source.shortDescription());
+                plugin.pathDebug().failure(plugin, "nether", "missing-portal", source.shortDescription());
+                sources.remove(source.key());
+                frontiers.remove(source.key());
+                saveSources();
+                sample.detail("portal-gone");
+                return;
+            }
+            if (state == SourceState.WAIT) {
+                plugin.pathDebug().trace(plugin, "nether", "spread.wait", source.shortDescription());
+                scheduleSpread(source, currentConfig.spreadStepTicks());
+                sample.detail("wait " + source.shortDescription());
+                return;
+            }
+
+            plugin.pathDebug().trace(plugin, "nether", "spread.active", source.shortDescription()
+                    + " attempts=" + currentConfig.attemptsPerStep()
+                    + " frontier=" + frontierFor(source).size());
+            int changed = 0;
+            int attempts = 0;
+            for (int attempt = 0; attempt < currentConfig.attemptsPerStep() && changed < currentConfig.blocksPerStep(); attempt++) {
+                attempts++;
+                Optional<Block> target = nextTarget(source, world, currentConfig);
+                if (target.isEmpty()) {
+                    continue;
+                }
+
+                Block block = target.get();
+                Material original = block.getType();
+                NetherMimicResult mimic = terrainMimic.mimic(block, source, random, nearbyCorruptionMaterials(world, block));
+                if (mimic != null && mimic.material() != original) {
+                    block.setType(mimic.material(), false);
+                    frontierFor(source).add(block.getX(), block.getY(), block.getZ(), currentConfig.maxFrontierSize());
+                    plugin.pathDebug().trace(plugin, "nether", "spread.replace", format(block)
+                            + " " + original + "->" + mimic.material()
+                            + " style=" + mimic.style().displayName());
+                    mapDebug.recordReplacement(plugin, currentConfig, source, block, original, mimic);
+                    changed++;
+                }
+            }
+            if (changed > 0) {
+                changedBlocks.addAndGet(changed);
+            } else {
+                plugin.pathDebug().trace(plugin, "nether", "spread.no-change", source.shortDescription());
+            }
+
+            sample.workUnits(attempts).changedUnits(changed).detail("changed=" + changed + " source=" + source.shortDescription());
             scheduleSpread(source, currentConfig.spreadStepTicks());
-            return;
         }
-
-        plugin.pathDebug().trace(plugin, "nether", "spread.active", source.shortDescription()
-                + " attempts=" + currentConfig.attemptsPerStep()
-                + " frontier=" + frontierFor(source).size());
-        int changed = 0;
-        for (int attempt = 0; attempt < currentConfig.attemptsPerStep() && changed < currentConfig.blocksPerStep(); attempt++) {
-            Optional<Block> target = nextTarget(source, world, currentConfig);
-            if (target.isEmpty()) {
-                continue;
-            }
-
-            Block block = target.get();
-            Material original = block.getType();
-            NetherMimicResult mimic = terrainMimic.mimic(block, source, random, nearbyCorruptionMaterials(world, block));
-            if (mimic != null && mimic.material() != original) {
-                block.setType(mimic.material(), false);
-                frontierFor(source).add(block.getX(), block.getY(), block.getZ(), currentConfig.maxFrontierSize());
-                plugin.pathDebug().trace(plugin, "nether", "spread.replace", format(block)
-                        + " " + original + "->" + mimic.material()
-                        + " style=" + mimic.style().displayName());
-                mapDebug.recordReplacement(plugin, currentConfig, source, block, original, mimic);
-                changed++;
-            }
-        }
-        if (changed > 0) {
-            changedBlocks.addAndGet(changed);
-        } else {
-            plugin.pathDebug().trace(plugin, "nether", "spread.no-change", source.shortDescription());
-        }
-
-        scheduleSpread(source, currentConfig.spreadStepTicks());
     }
 
     private SourceState sourceState(PortalSource source, World world, NetherCorruptionConfig currentConfig) {
@@ -506,45 +535,52 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     }
 
     private Optional<Block> findNearbyPortalBlock(Location location, int radius) {
-        World world = location.getWorld();
-        if (world == null) {
-            return Optional.empty();
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("nether", "search.nearby-portal")) {
+            World world = location.getWorld();
+            if (world == null) {
+                sample.detail("missing-world");
+                return Optional.empty();
+            }
 
-        int baseX = location.getBlockX();
-        int baseY = location.getBlockY();
-        int baseZ = location.getBlockZ();
-        int horizontalRadius = Math.max(3, radius);
-        int verticalRadius = Math.min(8, Math.max(2, radius / 4));
-        for (int y = -verticalRadius; y <= verticalRadius; y++) {
-            for (int x = -horizontalRadius; x <= horizontalRadius; x++) {
-                for (int z = -horizontalRadius; z <= horizontalRadius; z++) {
-                    if ((x * x) + (z * z) > horizontalRadius * horizontalRadius) {
-                        continue;
-                    }
+            int baseX = location.getBlockX();
+            int baseY = location.getBlockY();
+            int baseZ = location.getBlockZ();
+            int horizontalRadius = Math.max(3, radius);
+            int verticalRadius = Math.min(8, Math.max(2, radius / 4));
+            int scanned = 0;
+            for (int y = -verticalRadius; y <= verticalRadius; y++) {
+                for (int x = -horizontalRadius; x <= horizontalRadius; x++) {
+                    for (int z = -horizontalRadius; z <= horizontalRadius; z++) {
+                        if ((x * x) + (z * z) > horizontalRadius * horizontalRadius) {
+                            continue;
+                        }
 
-                    int blockY = baseY + y;
-                    if (blockY < world.getMinHeight() || blockY >= world.getMaxHeight()) {
-                        continue;
-                    }
+                        int blockY = baseY + y;
+                        if (blockY < world.getMinHeight() || blockY >= world.getMaxHeight()) {
+                            continue;
+                        }
 
-                    int blockX = baseX + x;
-                    int blockZ = baseZ + z;
-                    int chunkX = blockX >> 4;
-                    int chunkZ = blockZ >> 4;
-                    if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
-                        continue;
-                    }
+                        int blockX = baseX + x;
+                        int blockZ = baseZ + z;
+                        int chunkX = blockX >> 4;
+                        int chunkZ = blockZ >> 4;
+                        if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+                            continue;
+                        }
 
-                    Block block = world.getBlockAt(blockX, blockY, blockZ);
-                    if (block.getType() == Material.NETHER_PORTAL) {
-                        return Optional.of(block);
+                        scanned++;
+                        Block block = world.getBlockAt(blockX, blockY, blockZ);
+                        if (block.getType() == Material.NETHER_PORTAL) {
+                            sample.workUnits(scanned).changedUnits(1).detail("found " + format(block));
+                            return Optional.of(block);
+                        }
                     }
                 }
             }
-        }
 
-        return Optional.empty();
+            sample.workUnits(scanned).detail("not-found radius=" + radius);
+            return Optional.empty();
+        }
     }
 
     private boolean areBoundsLoaded(PortalSource source, World world) {
@@ -621,25 +657,30 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     }
 
     private void saveSources() {
-        plugin.pathDebug().trace(plugin, "nether", "persistence.save", "nether-sources.yml sources=" + sources.size());
-        YamlConfiguration yaml = new YamlConfiguration();
-        ConfigurationSection sourceSection = yaml.createSection("sources");
-        int index = 0;
-        for (PortalSource source : sources.values()) {
-            source.writeTo(sourceSection.createSection(Integer.toString(index++)));
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("nether", "persistence.save-sources")) {
+            plugin.pathDebug().trace(plugin, "nether", "persistence.save", "nether-sources.yml sources=" + sources.size());
+            YamlConfiguration yaml = new YamlConfiguration();
+            ConfigurationSection sourceSection = yaml.createSection("sources");
+            int index = 0;
+            for (PortalSource source : sources.values()) {
+                source.writeTo(sourceSection.createSection(Integer.toString(index++)));
+            }
 
-        File file = sourceFile();
-        File parent = file.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs()) {
-            plugin.getLogger().warning("Could not create plugin data folder for Nether corruption storage.");
-            return;
-        }
+            File file = sourceFile();
+            File parent = file.getParentFile();
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                plugin.getLogger().warning("Could not create plugin data folder for Nether corruption storage.");
+                sample.detail("folder-create-failed sources=" + sources.size());
+                return;
+            }
 
-        try {
-            yaml.save(file);
-        } catch (IOException ex) {
-            plugin.getLogger().log(Level.WARNING, "Could not save Nether corruption sources.", ex);
+            try {
+                yaml.save(file);
+                sample.workUnits(sources.size()).changedUnits(1).detail("sources=" + sources.size());
+            } catch (IOException ex) {
+                sample.detail("failed sources=" + sources.size() + " " + ex.getClass().getSimpleName());
+                plugin.getLogger().log(Level.WARNING, "Could not save Nether corruption sources.", ex);
+            }
         }
     }
 
@@ -649,6 +690,12 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
 
     private String blockKey(Block block) {
         return block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
+    }
+
+    private String portalNegativeCacheKey(Location location, int radius) {
+        World world = location.getWorld();
+        String worldKey = world == null ? "unknown" : world.getUID().toString();
+        return worldKey + ":" + (location.getBlockX() >> 4) + ":" + (location.getBlockZ() >> 4) + ":" + radius;
     }
 
     private String format(Block block) {

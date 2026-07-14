@@ -1,6 +1,10 @@
 # Default: 30 seconds at 20 TPS before the first replacement block appears.
 initial-delay-ticks: 600
 
+# testing: visible, fast, noisy growth for development.
+# survival: disables feature testing overrides and uses slower world-health pacing.
+runtime-profile: testing
+
 # Once regrowth begins, this controls how quickly blocks appear.
 # With world-health mode enabled at 0.15x, 135 ticks becomes about 45 seconds.
 growth-step-ticks: 135
@@ -55,6 +59,17 @@ architecture-pathfinding:
     recent-events: 500
     save-interval-millis: 10000
 
+# Lightweight in-plugin profiler. It reports which SlowTrees/LandAirSea feature
+# tasks cost the most time, which ones spike, and which ones are doing the most
+# world/change work. This complements Spark instead of replacing it.
+resource-reporter:
+  enabled: true
+  recent-events: 240
+  save-interval-millis: 10000
+  slow-sample-millis: 10
+  trace-to-architecture-debug: true
+  top-task-limit: 50
+
 # Materials that slow regrowth may replace. Solid player blocks are intentionally
 # not listed, so queued trees wait instead of eating builds.
 replaceable-materials:
@@ -101,10 +116,17 @@ meadow-growth:
   required-player-distance-chunks: 6
   grass-spread-chance-percent: 75
   plant-grow-chance-percent: 50
-  flower-chance-percent: 16
+  flower-chance-percent: 10
   height-growth-chance-percent: 35
-  max-plants-per-area: 48
+  max-plants-per-area: 30
   replace-leaf-litter: true
+  # Fast test mode lets grass, flowers, and forest edges visibly spread while
+  # world-health-mode is still enabled globally.
+  testing:
+    enabled: true
+    step-ticks: 10
+    attempts-per-step: 128
+    blocks-per-step: 8
 
 # Ecology evolution is a gentle, long-term enrichment layer inspired by richer
 # biome/worldgen datapacks. It does not copy external assets: it slowly nudges
@@ -122,11 +144,201 @@ ecology-evolution:
   branch-chance-percent: 28
   canopy-chance-percent: 50
   forest-floor-chance-percent: 20
+  ground-palette-chance-percent: 35
+  plant-palette-chance-percent: 70
+  rare-feature-chance-percent: 5
+  max-details-per-area: 36
   max-tree-height-bonus: 6
   max-branches-near-tree: 6
+  # Fast test mode makes biome ecology visible now. Later we can slow this
+  # down for survival pacing without changing the ecology rules.
+  testing:
+    enabled: true
+    step-ticks: 20
+    attempts-per-step: 128
+    blocks-per-step: 8
   debug:
     recent-events: 120
     map-radius: 8
+
+# Tree evolution is the explicit tree DNA system. It observes natural vanilla
+# trees near players, stores a seeded growth profile for each tree, and then
+# grows trunks, branches, canopy, roots, vines, and forest-floor details one
+# block at a time. Optional .nbt, .schem, .schematic, .zip, or .jar files
+# placed in plugins/SlowTrees/structure-scan are analyzed only for
+# statistics/debug inspiration; tree configured-feature JSON can also generate
+# TreeGrowthProfile suggestions. Those suggestions are saved into
+# tree-profile-samples.yml so new tree DNA can pick sampled variation. Exact
+# layouts and source JSON are not copied into generated output.
+tree-evolution:
+  enabled: true
+  # 45 seconds at 20 TPS before world-health mode. With 0.15x health mode this
+  # becomes about 5 minutes between eligible natural evolution steps per tree.
+  step-ticks: 900
+  # 0 means use the server view distance in blocks.
+  search-radius: 0
+  attempts-per-step: 48
+  blocks-per-step: 1
+  # Fast mode for watching the system work during testing. This bypasses the
+  # global world-health slowdown for tree evolution only.
+  testing:
+    enabled: true
+    # Fast but bounded test pacing: visible live growth without making every
+    # player tick rewrite the whole nearby forest.
+    step-ticks: 5
+    min-delay-ticks: 2
+    attempts-per-step: 48
+    blocks-per-step: 1
+    damage-stall-ticks: 20
+    stage-acceleration:
+      enabled: true
+      # ## Testing stage gates. Age increases when this tree places/prunes one
+      # block. Placement stays one block at a time so fast testing does not
+      # skip the same physical steps survival growth would take.
+      small-to-medium-age: 4
+      medium-to-mature-age: 12
+      mature-to-ancient-age: 36
+      allow-any-rarity-ancient: true
+      stage-burst-delay-multiplier: 0.04
+      breathing-skip-percent: 0
+  # 0 means use the scheduled player's visible/search area instead of a second
+  # chunk-distance gate.
+  required-player-distance-chunks: 0
+  owned-chunk-radius: 1
+  candidate-cache-millis: 10000
+  # Tree DNA is large during testing; debounce saves so growth ticks do not
+  # spend most of their time rewriting tree-evolution.yml.
+  dna-save-interval-millis: 180000
+  dna-cleanup:
+    enabled: true
+    interval-millis: 60000
+    # Removes stale DNA only when the chunk is already loaded/current-region
+    # and the stump/base has been missing this long. It will not load chunks.
+    missing-base-max-age-millis: 600000
+  damage-stall-ticks: 600
+  roots:
+    enabled: false
+  # Huge tree architecture is DNA-driven instead of a simple on/off profile:
+  # only rare, landmark, ancient, or scanned giant-like samples can grow 4-8
+  # block wide tapered trunks with layered canopy shelves.
+  dynamic-slowdown:
+    damage-delay-per-hit: 0.12
+    max-delay-multiplier: 3.0
+  debug:
+    enabled: true
+    recent-events: 200
+    map-radius: 10
+    # Writes tree-evolution-3dDebug.yml with stage history plus Y-layer slices
+    # of the current target tree plan. This is separate from the surface map.
+    3d:
+      enabled: true
+      recent-stage-events: 80
+    # Writes tree-evolution-replay.debug.yml with a sampled provenance report:
+    # what the plan expected, what the live block was, and why it can/cannot
+    # place there. ## Useful when smoke renders look better than live trees.
+    replay:
+      enabled: true
+      sample-limit: 512
+    # When true, startup scans files in plugins/SlowTrees/structure-scan and
+    # refreshes structure-scan-debug.yml without needing /slowtrees tree scan.
+    auto-scan-on-startup: true
+  profiles:
+    oak:
+      target-height-min: 14
+      target-height-max: 24
+      branches-min: 5
+      branches-max: 10
+      branch-length-min: 2
+      branch-length-max: 7
+      canopy-radius: 5
+      canopy-density: 0.74
+      root-chance: 0.32
+      vine-chance: 0.08
+      ground-detail-chance: 0.28
+    birch:
+      target-height-min: 18
+      target-height-max: 28
+      branches-min: 1
+      branches-max: 5
+      branch-length-min: 1
+      branch-length-max: 3
+      canopy-radius: 2
+      canopy-density: 0.58
+      root-chance: 0.08
+      vine-chance: 0.02
+      ground-detail-chance: 0.16
+    spruce:
+      target-height-min: 22
+      target-height-max: 38
+      branches-min: 6
+      branches-max: 14
+      branch-length-min: 1
+      branch-length-max: 5
+      canopy-radius: 4
+      canopy-density: 0.68
+      root-chance: 0.16
+      vine-chance: 0.03
+      ground-detail-chance: 0.22
+    jungle:
+      target-height-min: 30
+      target-height-max: 56
+      branches-min: 5
+      branches-max: 12
+      branch-length-min: 2
+      branch-length-max: 8
+      canopy-radius: 7
+      canopy-density: 0.72
+      root-chance: 0.28
+      vine-chance: 0.34
+      ground-detail-chance: 0.30
+    acacia:
+      target-height-min: 14
+      target-height-max: 22
+      branches-min: 4
+      branches-max: 8
+      branch-length-min: 2
+      branch-length-max: 7
+      canopy-radius: 5
+      canopy-density: 0.54
+      root-chance: 0.18
+      vine-chance: 0.02
+      ground-detail-chance: 0.12
+    dark_oak:
+      target-height-min: 16
+      target-height-max: 30
+      branches-min: 6
+      branches-max: 12
+      branch-length-min: 2
+      branch-length-max: 7
+      canopy-radius: 7
+      canopy-density: 0.80
+      root-chance: 0.34
+      vine-chance: 0.06
+      ground-detail-chance: 0.26
+    mangrove:
+      target-height-min: 18
+      target-height-max: 32
+      branches-min: 5
+      branches-max: 10
+      branch-length-min: 2
+      branch-length-max: 7
+      canopy-radius: 5
+      canopy-density: 0.70
+      root-chance: 0.45
+      vine-chance: 0.20
+      ground-detail-chance: 0.20
+    cherry:
+      target-height-min: 16
+      target-height-max: 28
+      branches-min: 5
+      branches-max: 10
+      branch-length-min: 2
+      branch-length-max: 6
+      canopy-radius: 6
+      canopy-density: 0.78
+      root-chance: 0.16
+      vine-chance: 0.03
+      ground-detail-chance: 0.24
 
 # Nether corruption treats active Nether portals in the Overworld as sources
 # of slow terrain change. It does not use a configurable replacement map:
@@ -141,6 +353,10 @@ nether-corruption:
   attempts-per-step: 96
   required-player-distance-chunks: 8
   player-portal-scan-radius: 32
+  portal-scan-cooldown-millis: 5000
+  # When a player movement scan finds no nearby portal, cache that empty result
+  # per chunk/radius so we do not rescan the same empty area constantly.
+  portal-negative-cache-millis: 30000
   testing:
     enabled: true
     spread-step-ticks: 40

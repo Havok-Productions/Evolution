@@ -47,6 +47,24 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 - Avoids caves, liquids, player blocks, unloaded chunks, distant players, and non-owned Folia regions.
 - Uses world health mode by default, so meadow spread slows with the global natural growth multiplier.
 
+## Tree Evolution
+
+- Observes natural vanilla trees near loaded, player-visible areas.
+- Stores seeded per-tree DNA in `tree-evolution.yml`.
+- Evolves trees one block at a time into taller trunks, branches, fuller canopy, roots, vines, and subtle ground detail.
+- Uses species profiles for oak, birch, spruce, jungle, acacia, dark oak, mangrove, and cherry.
+- Respects the stump rule: when the stump is removed, that tree DNA stops upward evolution.
+- Damage stalls a tree temporarily and adds dynamic slowdown that recovers as healthy growth succeeds.
+- Has a fast `tree-evolution.testing` mode for watching growth/profile behavior immediately during testing.
+- Roots are disabled by default with `tree-evolution.roots.enabled`; scanned samples still influence height, branch start, branch length, and uneven canopy shape.
+- Tree DNA now includes personality, rarity, age, generation, parent lineage, trunk thickness, lean, and sample inspiration, all written into the existing tree evolution debug files.
+- Mature and ancient trees can slowly seed nearby saplings when surface/light/spacing checks pass, allowing forests to thicken naturally.
+- Avoids unloaded chunks, non-owned Folia regions, player blocks, liquids, caves, and unnatural placement targets.
+- Writes `tree-evolution-trace.debug.yml` and `tree-evolution-map.debug.yml`.
+- Creates `structure-scan/` for optional `.nbt`, `.schem`, `.schematic`, `.zip`, or `.jar` analysis and writes `structure-scan-debug.yml`; these scans measure structure/worldgen signals, generate profile suggestions from tree configured-feature JSON, include species-source evidence, and do not copy exact layouts or source JSON.
+- Writes `tree-profile-samples.yml` from scanned worldgen suggestions; new tree DNA can pick one of those samples and stores the chosen sample id/source for debugging.
+- Auto-scans `structure-scan/` on startup when `tree-evolution.debug.auto-scan-on-startup` is enabled.
+
 ## Wind
 
 - Represents wind through drifting leaves near tree canopies.
@@ -61,6 +79,10 @@ The plugin depends on Folia's region scheduler and declares `folia-supported: tr
 
 - `/slowtrees reload` reloads `config.yml`.
 - `/slowtrees pending` shows the number of queued regrowth jobs.
+- `/slowtrees tree debug` dumps nearby tree DNA and target-plan details.
+- `/slowtrees tree step` forces one nearby tree evolution pass.
+- `/slowtrees tree preview` writes a nearby tree target-plan preview to debug files.
+- `/slowtrees tree scan` scans optional `.nbt`, `.schem`, `.schematic`, `.zip`, or `.jar` files in `structure-scan/`.
 
 ## API
 
@@ -72,6 +94,7 @@ int queued = api.regrowth().queuedCount();
 long grass = api.meadow().grassBlocksSpread();
 boolean tracked = api.nether().registerPortalSourceNear(location, 32);
 WindSnapshot wind = api.wind().currentPattern();
+long evolved = api.treeEvolution().changedBlockCount();
 ```
 
 The first API surface is intentionally small and stable:
@@ -81,6 +104,7 @@ The first API surface is intentionally small and stable:
 - Meadow growth: grass, plant, and flower growth counters.
 - Nether corruption: source counts, changed block count, material checks, and existing-portal registration.
 - Wind: enabled state, particle/litter counters, and current wind pattern.
+- Tree evolution: enabled state, known tree count, and changed block count.
 
 ## Permissions
 

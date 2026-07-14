@@ -171,6 +171,7 @@ public final class ArchitecturePathDebug {
         section.set("ACTION", "world-changing or visible action");
         section.set("STATE", "queue/source/lifecycle state change");
         section.set("DEBUG", "debug file write or debug artifact update");
+        section.set("RESOURCE", "resource reporter timing or strain sample");
     }
 
     private void recordRecent(ArchitecturePathDebugConfig currentConfig, String marker, String module, String path, String detail) {
@@ -193,6 +194,9 @@ public final class ArchitecturePathDebug {
         }
         if (path.startsWith("scheduler.")) {
             return "SCHED";
+        }
+        if (path.startsWith("resource.")) {
+            return "RESOURCE";
         }
         if (path.startsWith("blocked.") || path.contains(".skip.") || path.contains(".wait") || path.contains(".reject")) {
             return "GATE";

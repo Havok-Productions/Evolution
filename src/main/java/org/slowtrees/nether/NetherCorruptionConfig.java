@@ -1,6 +1,7 @@
 package org.slowtrees.nether;
 
 import org.bukkit.configuration.file.FileConfiguration;
+import org.slowtrees.core.RuntimeProfile;
 import org.slowtrees.core.SlowTreesPlugin;
 
 final class NetherCorruptionConfig {
@@ -12,6 +13,8 @@ final class NetherCorruptionConfig {
     private final int attemptsPerStep;
     private final int requiredPlayerDistanceChunks;
     private final int playerPortalScanRadius;
+    private final long portalScanCooldownMillis;
+    private final long portalNegativeCacheMillis;
     private final boolean testingEnabled;
     private final long testingSpreadStepTicks;
     private final int testingBlocksPerStep;
@@ -31,6 +34,8 @@ final class NetherCorruptionConfig {
             int attemptsPerStep,
             int requiredPlayerDistanceChunks,
             int playerPortalScanRadius,
+            long portalScanCooldownMillis,
+            long portalNegativeCacheMillis,
             boolean testingEnabled,
             long testingSpreadStepTicks,
             int testingBlocksPerStep,
@@ -49,6 +54,8 @@ final class NetherCorruptionConfig {
         this.attemptsPerStep = attemptsPerStep;
         this.requiredPlayerDistanceChunks = requiredPlayerDistanceChunks;
         this.playerPortalScanRadius = playerPortalScanRadius;
+        this.portalScanCooldownMillis = portalScanCooldownMillis;
+        this.portalNegativeCacheMillis = portalNegativeCacheMillis;
         this.testingEnabled = testingEnabled;
         this.testingSpreadStepTicks = testingSpreadStepTicks;
         this.testingBlocksPerStep = testingBlocksPerStep;
@@ -62,6 +69,7 @@ final class NetherCorruptionConfig {
 
     static NetherCorruptionConfig load(SlowTreesPlugin plugin) {
         FileConfiguration config = plugin.getConfig();
+        boolean testing = RuntimeProfile.testingEnabled(config) && config.getBoolean("nether-corruption.testing.enabled", true);
         return new NetherCorruptionConfig(
                 config.getBoolean("nether-corruption.enabled", true),
                 Math.max(1L, config.getLong("nether-corruption.spread-step-ticks", 1200L)),
@@ -71,7 +79,9 @@ final class NetherCorruptionConfig {
                 Math.max(1, config.getInt("nether-corruption.attempts-per-step", 96)),
                 Math.max(0, config.getInt("nether-corruption.required-player-distance-chunks", 8)),
                 Math.max(0, config.getInt("nether-corruption.player-portal-scan-radius", 32)),
-                config.getBoolean("nether-corruption.testing.enabled", true),
+                Math.max(1000L, config.getLong("nether-corruption.portal-scan-cooldown-millis", 5000L)),
+                Math.max(1000L, config.getLong("nether-corruption.portal-negative-cache-millis", 30000L)),
+                testing,
                 Math.max(1L, config.getLong("nether-corruption.testing.spread-step-ticks", 40L)),
                 Math.max(1, config.getInt("nether-corruption.testing.blocks-per-step", 4)),
                 config.getBoolean("nether-corruption.branching.enabled", true),
@@ -115,6 +125,14 @@ final class NetherCorruptionConfig {
         return playerPortalScanRadius;
     }
 
+    long portalScanCooldownMillis() {
+        return portalScanCooldownMillis;
+    }
+
+    long portalNegativeCacheMillis() {
+        return portalNegativeCacheMillis;
+    }
+
     int debugRecentEvents() {
         return debugRecentEvents;
     }
@@ -155,6 +173,8 @@ final class NetherCorruptionConfig {
                 + ", frontier-max=" + maxFrontierSize
                 + ", player-distance-chunks=" + requiredPlayerDistanceChunks
                 + ", portal-scan-radius=" + playerPortalScanRadius
+                + ", portal-scan-cooldown-ms=" + portalScanCooldownMillis
+                + ", portal-negative-cache-ms=" + portalNegativeCacheMillis
                 + ", debug-events=" + debugRecentEvents
                 + ", debug-map-radius=" + debugMapRadius;
     }

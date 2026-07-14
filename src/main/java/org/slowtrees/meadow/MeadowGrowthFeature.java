@@ -12,6 +12,7 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Biome;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.Bisected;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Player;
@@ -20,6 +21,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.slowtrees.core.PluginFeature;
+import org.slowtrees.core.ResourceReporter.ReportSample;
 import org.slowtrees.core.SlowTreesPlugin;
 
 public final class MeadowGrowthFeature implements PluginFeature, Listener {
@@ -134,100 +136,119 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
     }
 
     private void runNearPlayer(Player player) {
-        MeadowGrowthConfig currentConfig = config;
-        if (!player.isOnline()) {
-            plugin.pathDebug().trace(plugin, "meadow", "tick.skip.offline-player", "player no longer online");
-            return;
-        }
-
-        if (!currentConfig.enabled()) {
-            plugin.pathDebug().trace(plugin, "meadow", "tick.skip.disabled", "step=" + currentConfig.stepTicks());
-            schedulePlayerMeadow(player, currentConfig.stepTicks());
-            return;
-        }
-
-        Location origin = player.getLocation();
-        World world = origin.getWorld();
-        if (world == null || world.getEnvironment() != World.Environment.NORMAL || !currentConfig.isWorldAllowed(world)) {
-            plugin.pathDebug().trace(plugin, "meadow", "tick.skip.environment", world == null ? "missing-world" : world.getName());
-            schedulePlayerMeadow(player, currentConfig.stepTicks());
-            return;
-        }
-
-        int changed = 0;
-        for (int attempt = 0; attempt < currentConfig.attemptsPerStep() && changed < currentConfig.blocksPerStep(); attempt++) {
-            Optional<Block> target = findTarget(origin, currentConfig);
-            if (target.isEmpty()) {
-                continue;
+        try (ReportSample sample = plugin.resourceReporter().begin("meadow", "tick.run-near-player")) {
+            MeadowGrowthConfig currentConfig = config;
+            if (!player.isOnline()) {
+                plugin.pathDebug().trace(plugin, "meadow", "tick.skip.offline-player", "player no longer online");
+                sample.detail("offline-player");
+                return;
             }
 
-            if (growAt(target.get(), currentConfig)) {
-                changed++;
+            if (!currentConfig.enabled()) {
+                plugin.pathDebug().trace(plugin, "meadow", "tick.skip.disabled", "step=" + currentConfig.stepTicks());
+                schedulePlayerMeadow(player, currentConfig.stepTicks());
+                sample.detail("disabled");
+                return;
             }
-        }
 
-        plugin.pathDebug().traceSampled(plugin, "meadow", changed > 0 ? "growth.step.changed" : "growth.step.no-change",
-                "changed=" + changed + " near=" + format(origin));
-        schedulePlayerMeadow(player, currentConfig.stepTicks());
+            Location origin = player.getLocation();
+            World world = origin.getWorld();
+            if (world == null || world.getEnvironment() != World.Environment.NORMAL || !currentConfig.isWorldAllowed(world)) {
+                plugin.pathDebug().trace(plugin, "meadow", "tick.skip.environment", world == null ? "missing-world" : world.getName());
+                schedulePlayerMeadow(player, currentConfig.stepTicks());
+                sample.detail("environment-skip");
+                return;
+            }
+
+            int changed = 0;
+            int attempts = 0;
+            for (int attempt = 0; attempt < currentConfig.attemptsPerStep() && changed < currentConfig.blocksPerStep(); attempt++) {
+                attempts++;
+                Optional<Block> target = findTarget(origin, currentConfig);
+                if (target.isEmpty()) {
+                    continue;
+                }
+
+                if (growAt(target.get(), currentConfig)) {
+                    changed++;
+                }
+            }
+
+            sample.workUnits(attempts).changedUnits(changed).detail("changed=" + changed + " near=" + format(origin));
+            plugin.pathDebug().traceSampled(plugin, "meadow", changed > 0 ? "growth.step.changed" : "growth.step.no-change",
+                    "changed=" + changed + " near=" + format(origin));
+            schedulePlayerMeadow(player, currentConfig.stepTicks());
+        }
     }
 
     private Optional<Block> findTarget(Location origin, MeadowGrowthConfig currentConfig) {
-        World world = origin.getWorld();
-        if (world == null) {
-            return Optional.empty();
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("meadow", "search.find-target")) {
+            World world = origin.getWorld();
+            if (world == null) {
+                sample.detail("missing-world");
+                return Optional.empty();
+            }
 
-        int radius = currentConfig.searchRadius();
-        int dx = random.nextInt(radius * 2 + 1) - radius;
-        int dz = random.nextInt(radius * 2 + 1) - radius;
-        if ((dx * dx) + (dz * dz) > radius * radius) {
-            return Optional.empty();
-        }
+            int radius = currentConfig.searchRadius();
+            int dx = random.nextInt(radius * 2 + 1) - radius;
+            int dz = random.nextInt(radius * 2 + 1) - radius;
+            if ((dx * dx) + (dz * dz) > radius * radius) {
+                sample.detail("radius-roll");
+                return Optional.empty();
+            }
 
-        int x = origin.getBlockX() + dx;
-        int z = origin.getBlockZ() + dz;
-        int chunkX = x >> 4;
-        int chunkZ = z >> 4;
-        if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
-            plugin.pathDebug().failure(plugin, "meadow", "chunk-or-region-gate", "target chunk " + chunkX + "," + chunkZ);
-            return Optional.empty();
-        }
+            int x = origin.getBlockX() + dx;
+            int z = origin.getBlockZ() + dz;
+            int chunkX = x >> 4;
+            int chunkZ = z >> 4;
+            if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+                plugin.pathDebug().failure(plugin, "meadow", "chunk-or-region-gate", "target chunk " + chunkX + "," + chunkZ);
+                sample.detail("chunk-or-region");
+                return Optional.empty();
+            }
 
-        Block highest = world.getHighestBlockAt(x, z);
-        if (highest.getY() <= world.getMinHeight()) {
-            return Optional.empty();
-        }
+            Block highest = world.getHighestBlockAt(x, z);
+            if (highest.getY() <= world.getMinHeight()) {
+                sample.detail("min-height");
+                return Optional.empty();
+            }
 
-        Block ground = highest.getType().isAir() ? highest.getRelative(0, -1, 0) : highest;
-        if (!isSurfaceCandidate(ground)) {
-            ground = ground.getRelative(0, -1, 0);
+            Block ground = highest.getType().isAir() ? highest.getRelative(0, -1, 0) : highest;
+            if (!isSurfaceCandidate(ground)) {
+                ground = ground.getRelative(0, -1, 0);
+            }
+            if (!isNearPlayer(ground.getLocation(), currentConfig.requiredPlayerDistanceChunks())) {
+                plugin.pathDebug().failure(plugin, "meadow", "player-distance", format(ground));
+                sample.detail("player-distance");
+                return Optional.empty();
+            }
+            sample.changedUnits(1).detail("found " + format(ground));
+            return Optional.of(ground);
         }
-        if (!isNearPlayer(ground.getLocation(), currentConfig.requiredPlayerDistanceChunks())) {
-            plugin.pathDebug().failure(plugin, "meadow", "player-distance", format(ground));
-            return Optional.empty();
-        }
-        return Optional.of(ground);
     }
 
     private boolean growAt(Block block, MeadowGrowthConfig currentConfig) {
-        if (!hasSurfaceLight(block) || block.isLiquid()) {
-            return false;
-        }
+        try (ReportSample sample = plugin.resourceReporter().begin("meadow", "action.grow-at")) {
+            if (!hasSurfaceLight(block) || block.isLiquid()) {
+                sample.detail("surface-light-or-liquid");
+                return false;
+            }
 
-        Material type = block.getType();
-        if (SPREADABLE_GROUND.contains(type)) {
-            return spreadGrass(block, currentConfig);
-        }
+            Material type = block.getType();
+            boolean changed;
+            if (SPREADABLE_GROUND.contains(type)) {
+                changed = spreadGrass(block, currentConfig);
+            } else if (MEADOW_GROUND.contains(type)) {
+                changed = growSurfacePlant(block, currentConfig);
+            } else if ((type == Material.SHORT_GRASS || type == Material.FERN) && random.nextInt(100) < currentConfig.heightGrowthChancePercent()) {
+                changed = growPlantTaller(block, currentConfig);
+            } else {
+                changed = false;
+            }
 
-        if (MEADOW_GROUND.contains(type)) {
-            return growSurfacePlant(block, currentConfig);
+            sample.changedUnits(changed ? 1L : 0L).detail(type + " at " + format(block));
+            return changed;
         }
-
-        if ((type == Material.SHORT_GRASS || type == Material.FERN) && random.nextInt(100) < currentConfig.heightGrowthChancePercent()) {
-            return growPlantTaller(block, currentConfig);
-        }
-
-        return false;
     }
 
     private boolean spreadGrass(Block ground, MeadowGrowthConfig currentConfig) {
@@ -308,11 +329,29 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
 
     private Material choosePlant(Biome biome, Block target, MeadowGrowthConfig currentConfig) {
         Material clustered = nearbyFlower(target);
-        if (clustered != null && random.nextInt(100) < 70) {
+        if (clustered != null && countNearbyFlowers(target, 5) < 4 && random.nextInt(100) < 42) {
             return clustered;
         }
 
-        if (random.nextInt(100) < currentConfig.flowerChancePercent()) {
+        if (isWetPocket(target)) {
+            return biomeKey(biome).contains("SWAMP") ? Material.BLUE_ORCHID : (random.nextBoolean() ? Material.FERN : Material.SHORT_GRASS);
+        }
+        if (isSlopedPocket(target.getRelative(BlockFace.DOWN))) {
+            return random.nextInt(100) < 68 ? Material.SHORT_GRASS : Material.FERN;
+        }
+        if (target.getLightFromSky() < 7) {
+            return random.nextInt(100) < 58 ? Material.FERN : Material.SHORT_GRASS;
+        }
+
+        Material rareFeature = rareSurfaceFeature(biome, target);
+        if (rareFeature != null) {
+            return rareFeature;
+        }
+
+        int flowerChance = currentConfig.maxPlantsPerArea() > 0 && countNearbyPlants(target, 5) > currentConfig.maxPlantsPerArea() / 2
+                ? Math.max(4, currentConfig.flowerChancePercent() / 2)
+                : currentConfig.flowerChancePercent();
+        if (countNearbyFlowers(target, 6) < 4 && random.nextInt(100) < flowerChance) {
             return flowerForBiome(biome, target.getX(), target.getZ());
         }
 
@@ -321,6 +360,60 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
             return random.nextInt(100) < 30 ? Material.FERN : Material.SHORT_GRASS;
         }
         return random.nextInt(100) < 12 ? Material.FERN : Material.SHORT_GRASS;
+    }
+
+    private Material rareSurfaceFeature(Biome biome, Block target) {
+        if (random.nextInt(100) >= 3 || countNearbyRareFeatures(target, 12) >= 2) {
+            return null;
+        }
+        String key = biomeKey(biome);
+        if (hasAdjacentWater(target.getRelative(BlockFace.DOWN)) && random.nextBoolean()) {
+            return Material.SUGAR_CANE;
+        }
+        if (key.contains("JUNGLE")) {
+            return target.getLightFromSky() >= 9 ? Material.MELON : null;
+        }
+        if (key.contains("TAIGA") || key.contains("OLD_GROWTH")) {
+            return Material.SWEET_BERRY_BUSH;
+        }
+        if (key.contains("SAVANNA") || key.contains("DESERT") || key.contains("BADLANDS")) {
+            return Material.DEAD_BUSH;
+        }
+        if (key.contains("FOREST") || key.contains("PLAINS") || key.contains("MEADOW")) {
+            return target.getLightFromSky() >= 9 ? Material.PUMPKIN : null;
+        }
+        return null;
+    }
+
+    private boolean isWetPocket(Block target) {
+        for (BlockFace face : List.of(BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST, BlockFace.DOWN)) {
+            if (target.getRelative(face).isLiquid()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isSlopedPocket(Block ground) {
+        int uneven = 0;
+        for (BlockFace face : List.of(BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST)) {
+            Block neighbor = ground.getRelative(face);
+            if (!MEADOW_GROUND.contains(neighbor.getType()) && !SPREADABLE_GROUND.contains(neighbor.getType())
+                    && !MEADOW_GROUND.contains(neighbor.getRelative(BlockFace.DOWN).getType())
+                    && !SPREADABLE_GROUND.contains(neighbor.getRelative(BlockFace.DOWN).getType())) {
+                uneven++;
+            }
+        }
+        return uneven >= 2;
+    }
+
+    private boolean hasAdjacentWater(Block ground) {
+        for (BlockFace face : List.of(BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST)) {
+            if (ground.getRelative(face).isLiquid() || ground.getRelative(face).getRelative(BlockFace.UP).isLiquid()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Material flowerForBiome(Biome biome, int x, int z) {
@@ -409,6 +502,39 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
             for (int dz = -radius; dz <= radius; dz++) {
                 for (int dy = -1; dy <= 1; dy++) {
                     if (MEADOW_PLANTS.contains(center.getRelative(dx, dy, dz).getType())) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    private int countNearbyFlowers(Block center, int radius) {
+        int count = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    if (isFlower(center.getRelative(dx, dy, dz).getType())) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    private int countNearbyRareFeatures(Block center, int radius) {
+        int count = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    Material type = center.getRelative(dx, dy, dz).getType();
+                    if (type == Material.PUMPKIN
+                            || type == Material.MELON
+                            || type == Material.SWEET_BERRY_BUSH
+                            || type == Material.SUGAR_CANE
+                            || type == Material.DEAD_BUSH) {
                         count++;
                     }
                 }
