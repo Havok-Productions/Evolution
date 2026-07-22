@@ -100,6 +100,7 @@ public final class TreeGrowthQueuePolicySmokeTest {
                 "TreeGrowthQueuePolicySmokeTest",
                 "wild",
                 0,
+                TreeDna.CURRENT_SHAPE_REVISION,
                 TreeGrowthIntent.HEIGHT,
                 0,
                 0,

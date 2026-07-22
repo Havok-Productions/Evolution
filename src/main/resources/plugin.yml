@@ -1,15 +1,21 @@
-name: SlowTrees
+name: Evolution
 version: ${project.version}
 main: org.slowtrees.core.SlowTreesPlugin
 api-version: '26.1.2'
 folia-supported: true
-description: Folia-safe natural regrowth and Nether portal corruption.
+description: Folia-safe natural world evolution, regrowth, wind, puddles, waves, ecology, and Nether corruption.
 commands:
-  slowtrees:
-    description: Manage SlowTrees.
-    usage: /slowtrees <reload|status|pending|tree>
-    permission: slowtrees.admin
+  evolution:
+    description: Manage Evolution.
+    usage: /evolution <reload|status|pending|tree>
+    aliases: [slowtrees]
+    permission: evolution.admin
 permissions:
-  slowtrees.admin:
-    description: Allows SlowTrees administration commands.
+  evolution.admin:
+    description: Allows Evolution administration commands.
     default: op
+  slowtrees.admin:
+    description: Legacy alias for Evolution administration commands.
+    default: op
+    children:
+      evolution.admin: true

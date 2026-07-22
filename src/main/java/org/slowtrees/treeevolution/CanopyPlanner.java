@@ -63,12 +63,23 @@ final class CanopyPlanner {
             planLeafBlob(plan, dna, centerX, baseY + 2, centerZ, Math.max(1, radiusX - 2), 1, Math.max(1, radiusZ - 2), random);
         }
 
-        int tipCap = dna.maturityStage() == TreeMaturityStage.SMALL ? 1 : 2;
+        int tipCap = earlyBranchTipCanopyCap(dna);
         for (TreeBranchPlan.BranchTip tip : branchTips) {
-            if (random.nextBoolean()) {
-                planLeafBlob(plan, dna, tip.x(), tip.y(), tip.z(), tipCap, 1, tipCap, random);
+            planLeafBlob(plan, dna, tip.x(), tip.y(), tip.z(), tipCap, 1, tipCap, random);
+            if (dna.maturityStage() == TreeMaturityStage.MEDIUM && dna.species() != TreeSpecies.BIRCH) {
+                planLeafBlob(plan, dna, tip.x(), tip.y() + 1, tip.z(), Math.max(1, tipCap - 1), 1, Math.max(1, tipCap - 1), random);
             }
         }
+    }
+
+    private int earlyBranchTipCanopyCap(TreeDna dna) {
+        return switch (dna.species()) {
+            case BIRCH -> dna.maturityStage() == TreeMaturityStage.SMALL ? 1 : 2;
+            case ACACIA -> dna.maturityStage() == TreeMaturityStage.SMALL ? 2 : 3;
+            case OAK, CHERRY, DARK_OAK, MANGROVE -> dna.maturityStage() == TreeMaturityStage.SMALL ? 2 : 3;
+            case JUNGLE -> dna.maturityStage() == TreeMaturityStage.SMALL ? 2 : 4;
+            case SPRUCE -> 2;
+        };
     }
 
     private int branchTipCanopyCap(TreeDna dna) {
@@ -79,11 +90,12 @@ final class CanopyPlanner {
             case ANCIENT -> 5;
         };
         int speciesCap = switch (dna.species()) {
-            case BIRCH, SPRUCE -> 2;
-            case CHERRY -> 3;
-            case OAK, ACACIA, MANGROVE -> 3;
-            case DARK_OAK -> 4;
-            case JUNGLE -> 5;
+            case BIRCH -> 2;
+            case SPRUCE -> 3;
+            case OAK, ACACIA -> 4;
+            case CHERRY, MANGROVE -> 4;
+            case DARK_OAK -> 5;
+            case JUNGLE -> 6;
         };
         return Math.max(1, Math.min(stageCap, speciesCap));
     }
@@ -123,17 +135,16 @@ final class CanopyPlanner {
 
     private int layerCanopyCap(TreeDna dna, int layer) {
         int base = switch (dna.species()) {
-            case JUNGLE -> 6;
-            case DARK_OAK -> 5;
-            case CHERRY -> 5;
-            case OAK, MANGROVE -> 4;
-            case ACACIA -> 4;
+            case JUNGLE -> 8;
+            case DARK_OAK -> 7;
+            case CHERRY -> 6;
+            case OAK, MANGROVE -> 6;
+            case ACACIA -> 6;
             case BIRCH -> 3;
             case SPRUCE -> 7;
         };
         if (dna.maturityStage() == TreeMaturityStage.ANCIENT
-                && dna.species() != TreeSpecies.BIRCH
-                && dna.species() != TreeSpecies.OAK) {
+                && dna.species() != TreeSpecies.BIRCH) {
             base++;
         }
         return Math.max(2, base - Math.max(0, layer / 2));
@@ -147,6 +158,15 @@ final class CanopyPlanner {
         };
     }
 
+    private double fancyCanopyDensityFloor(TreeDna dna) {
+        return switch (dna.species()) {
+            case BIRCH -> 0.72D;
+            case ACACIA -> 0.70D;
+            case CHERRY -> 0.78D;
+            case SPRUCE -> 0.0D;
+            default -> 0.80D;
+        };
+    }
     private void planLeafBlob(TreePlan plan, TreeDna dna, int centerX, int centerY, int centerZ, int radiusX, int radiusY, int radiusZ, Random random) {
         for (int x = -radiusX; x <= radiusX; x++) {
             for (int y = -radiusY; y <= radiusY; y++) {
@@ -155,7 +175,17 @@ final class CanopyPlanner {
                     double ny = Math.abs(y) / Math.max(1.0D, radiusY);
                     double nz = Math.abs(z) / Math.max(1.0D, radiusZ);
                     double normalized = (nx + (ny * 1.25D) + nz) / 2.65D;
-                    if (normalized > 1.0D || random.nextDouble() > TreeSpeciesStageStyle.canopyDensity(dna) - (normalized * 0.18D)) {
+                    boolean fancyCloud = usesFancyEarlyCrown(dna);
+                    double density = fancyCloud
+                            ? Math.max(TreeSpeciesStageStyle.canopyDensity(dna),
+                                    fancyCanopyDensityFloor(dna))
+                            : TreeSpeciesStageStyle.canopyDensity(dna);
+                    boolean solidInnerCloud = fancyCloud && normalized <= 0.58D;
+                    double edgeVariation = fancyCloud ? 0.10D : 0.18D;
+                    if (normalized > 1.0D
+                            || (!solidInnerCloud
+                                    && random.nextDouble() > density
+                                            - (normalized * edgeVariation))) {
                         continue;
                     }
                     plan.add(new PlannedTreeBlock(

@@ -59,7 +59,7 @@ architecture-pathfinding:
     recent-events: 500
     save-interval-millis: 10000
 
-# Lightweight in-plugin profiler. It reports which SlowTrees/LandAirSea feature
+# Lightweight in-plugin profiler. It reports which Evolution feature
 # tasks cost the most time, which ones spike, and which ones are doing the most
 # world/change work. This complements Spark instead of replacing it.
 resource-reporter:
@@ -165,7 +165,7 @@ ecology-evolution:
 # trees near players, stores a seeded growth profile for each tree, and then
 # grows trunks, branches, canopy, roots, vines, and forest-floor details one
 # block at a time. Optional .nbt, .schem, .schematic, .zip, or .jar files
-# placed in plugins/SlowTrees/structure-scan are analyzed only for
+# placed in plugins/Evolution/structure-scan are analyzed only for
 # statistics/debug inspiration; tree configured-feature JSON can also generate
 # TreeGrowthProfile suggestions. Those suggestions are saved into
 # tree-profile-samples.yml so new tree DNA can pick sampled variation. Exact
@@ -218,6 +218,10 @@ tree-evolution:
   damage-stall-ticks: 600
   roots:
     enabled: false
+  # ## MEDIUM is the fancy-tree form: a visible trunk, real branches, and a cloud-like crown.
+  # MATURE and ANCIENT remain available in code but are not entered while this ceiling is active.
+  # ## Shape revision 5 requires complete per-tree leaf ownership before pruning or finishing a transition.
+  maximum-stage: MEDIUM
   # Huge tree architecture is DNA-driven instead of a simple on/off profile:
   # only rare, landmark, ancient, or scanned giant-like samples can grow 4-8
   # block wide tapered trunks with layered canopy shelves.
@@ -228,8 +232,9 @@ tree-evolution:
     enabled: true
     recent-events: 200
     map-radius: 10
-    # Writes tree-evolution-3dDebug.yml with stage history plus Y-layer slices
-    # of the current target tree plan. This is separate from the surface map.
+    # Writes tree-evolution-3dDebug.yml with stage history, Y-layer slices,
+    # and numeric 0-8 voxel grids so planned shape and live growth can be
+    # compared 1-for-1. ## Model grid is the tree blueprint; live-status grid is progress.
     3d:
       enabled: true
       recent-stage-events: 80
@@ -239,8 +244,8 @@ tree-evolution:
     replay:
       enabled: true
       sample-limit: 512
-    # When true, startup scans files in plugins/SlowTrees/structure-scan and
-    # refreshes structure-scan-debug.yml without needing /slowtrees tree scan.
+    # When true, startup scans files in plugins/Evolution/structure-scan and
+    # refreshes structure-scan-debug.yml without needing /evolution tree scan.
     auto-scan-on-startup: true
   profiles:
     oak:
@@ -393,3 +398,167 @@ wind:
     max-per-chunk: 96
   debug:
     recent-events: 40
+
+# Puddles are packet-rendered shallow water during rain. They are visual only:
+# no real water blocks are placed, so terrain and builds stay untouched.
+# ## Seed, expansion, drying, render, and safety gates write to puddles.debug.yml.
+puddles:
+  enabled: true
+  step-ticks: 20
+  radius: 32
+  max-puddles-per-world: 300
+  required-player-distance-chunks: 6
+  growth:
+    seed-chance: 0.16
+    seed-attempts-per-cycle: 6
+    expand-chance: 0.08
+    single-puddle-expand-chance: 0.025
+    thunderstorm-multiplier: 2.0
+    max-expansions-per-cycle: 2
+    max-puddle-size: 5
+    nearby-puddles-to-merge: 3
+    merge-search-radius: 4
+    max-depth: 3
+  drying:
+    start-after-rain-seconds: 5.0
+    shrink-chance: 0.18
+  render:
+    mode: PACKET
+    restore-on-disable: true
+  testing:
+    enabled: true
+    step-ticks: 10
+    seed-attempts-per-cycle: 10
+    max-expansions-per-cycle: 4
+  debug:
+    recent-events: 80
+
+# Waves are packet-rendered water crests and shoreline run-up. They do not move
+# real water blocks. ## Sources begin below sea level and emerge as open directional wave fronts.
+waves:
+  # ## Sources resolve from a fixed 192-block world lattice and lock to water/shore topology.
+  # Players activate nearby loaded sources for Folia safety, but never seed or reposition them.
+  enabled: true
+  simulation-radius: 120
+  render-radius: 100
+  update-interval-ticks: 6
+  column-step: 1
+  # ## Coherent frames prevent staggered scan holes; submerged samples avoid terrain lookup.
+  max-columns-per-tick: 20000
+  max-block-updates-per-tick-per-player: 26000
+  render:
+    # ## Batch fake block changes by chunk section instead of sending one packet per cell.
+    packed-block-updates: true
+    # ## Packet-only water can be overwritten when Minecraft resends a chunk. Reassert
+    # a bounded slice of unchanged visuals so movement/view updates cannot erase a wave.
+    reassert-interval-ticks: 40
+    reassert-budget-per-frame: 1024
+  surface-cache:
+    # ## Terrain and shore data are stable; longer caching avoids repeated 16-block coast scans.
+    ttl-ticks: 600
+    max-chunks: 768
+    max-water-depth-scan: 8
+  smooth-motion:
+    # ## Four-tick interpolation lets sub-block front movement change packet-water
+    # levels before the crest advances to the next full block.
+    enabled: true
+    max-update-interval-ticks: 4
+  visual-memory:
+    sticky-ticks: 8
+    crest-lifecycle-ticks: 12
+    # ## Four-tick frames ease one packet-water level at a time.
+    smoothing: 0.35
+  # ## Persistent boomerang fronts use these proportions. Crossing fronts vary their
+  # approach angle; giant fronts add a second lower trailing shelf.
+  oval-pulses:
+    lane-spacing-scale: 0.80
+    travel-spacing-scale: 1.25
+    width-min-scale: 0.16
+    width-max-scale: 0.78
+    length-min-scale: 0.20
+    length-max-scale: 0.98
+    lifecycle-seconds: 22.0
+    merge-softness: 1.00
+    shore-compression: 0.22
+    shore-boost: 0.28
+    shallow-water-boost: 0.12
+    # ## Strength forms a layered shoulder toward the open leading ridge.
+    height-bands:
+      edge: 0.20
+      shoulder: 0.50
+      inner: 0.80
+      crest: 1.80
+      # ## Values above 0.10 are capped internally for smoother packet-water terraces.
+      step: 0.20
+  clear:
+    amplitude: 0.78
+    # ## Speed is blocks per second, not blocks per tick.
+    speed: 1.35
+    wavelength: 44
+    # ## Frequency now controls crest cadence independently from travel speed.
+    frequency: 2.20
+    height-variation: 0.55
+    occurrence: 0.98
+    # ## Persistent fronts remain active across long open-water journeys.
+    travel-distance: 168
+    # ## Distance expiry and shoreline contact control the final fizzle.
+    fade-start: 0.62
+    fade-power: 0.72
+  storm:
+    amplitude: 2.10
+    # ## Storm waves move faster, but still use blocks per second.
+    speed: 2.00
+    wavelength: 36
+    frequency: 2.35
+    height-variation: 0.95
+    occurrence: 1.00
+    travel-distance: 208
+    fade-start: 0.68
+    fade-power: 0.62
+  # ## Offshore course biases create angled and crossing approaches. Bias fades near
+  # land so every complete front converges on and fizzles into the shoreline.
+  shoreline-response:
+    distance: 16
+    fetch-distance: 16
+    minimum-facing: 0.20
+  shoreline-runup:
+    enabled: true
+    max-distance: 6
+    advance-ticks-per-block: 3
+    retreat-ticks-per-block: 5
+  particles:
+    enabled: true
+    budget-per-player: 18
+  boats:
+    bobbing-enabled: true
+    envelope-radius: 3
+  worlds-whitelist: []
+  # ## Disabled by default so continuous water remains continuous across biome borders.
+  # Enable this only when waves must be restricted to the list below.
+  biome-filter-enabled: false
+  biomes-whitelist:
+    - ocean
+    - deep_ocean
+    - warm_ocean
+    - lukewarm_ocean
+    - deep_lukewarm_ocean
+    - cold_ocean
+    - deep_cold_ocean
+    - frozen_ocean
+    - deep_frozen_ocean
+    - river
+    - frozen_river
+    - swamp
+    - mangrove_swamp
+    - beach
+    - snowy_beach
+    - stony_shore
+  testing:
+    enabled: true
+    update-interval-ticks: 6
+    simulation-radius: 120
+    render-radius: 100
+    # ## Testing scans the full 100-block view coherently so moving fronts stay contiguous.
+    max-columns-per-tick: 20000
+  debug:
+    recent-events: 100

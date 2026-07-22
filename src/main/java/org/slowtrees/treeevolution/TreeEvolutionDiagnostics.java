@@ -28,6 +28,7 @@ final class TreeEvolutionDiagnostics {
     private final AtomicLong dnaLoaded = new AtomicLong();
     private final AtomicLong planned = new AtomicLong();
     private final AtomicLong placed = new AtomicLong();
+    private final AtomicLong pruned = new AtomicLong();
     private final AtomicLong rejected = new AtomicLong();
     private final AtomicLong stalled = new AtomicLong();
     private final AtomicLong forcedSteps = new AtomicLong();
@@ -53,6 +54,10 @@ final class TreeEvolutionDiagnostics {
     private volatile String lastLive3dSummary = "none";
     private volatile Map<String, Object> lastLive3dStatusCounts = Map.of();
     private volatile List<Map<String, Object>> lastLive3dLayers = List.of();
+    private volatile String lastVoxelGridSummary = "none";
+    private volatile Map<String, Object> lastVoxelGridAxes = Map.of();
+    private volatile List<Map<String, Object>> lastVoxelModelLayers = List.of();
+    private volatile List<Map<String, Object>> lastVoxelLiveStatusLayers = List.of();
     private volatile Map<String, Object> lastReplaySummary = Map.of();
     private volatile Map<String, Object> lastReplayRoleProgress = Map.of();
     private volatile Map<String, Integer> lastReplayProvenanceCounts = Map.of();
@@ -206,6 +211,15 @@ final class TreeEvolutionDiagnostics {
                 + " " + reason);
     }
 
+    void recordGrowthContract(TreeEvolutionConfig config, TreeDna dna, TreeGrowthContract.Assessment assessment, String detail) {
+        event(config, "[TRACE][tree-evolution] growth.contract species=" + dna.species().id()
+                + " base=" + dna.baseX() + "," + dna.baseY() + "," + dna.baseZ()
+                + " stage=" + dna.maturityStage()
+                + " age=" + dna.age()
+                + " " + detail
+                + " ## staged growth contract keeps live trees aligned with projected 3D silhouettes");
+    }
+
     void recordStageTransition(TreeEvolutionConfig config, TreeDna dna, TreeMaturityStage from, TreeMaturityStage to, String detail) {
         stageTransitions.incrementAndGet();
         stageEvent(config, "[STATE][tree-evolution] stage.transition " + from + "->" + to
@@ -233,13 +247,23 @@ final class TreeEvolutionDiagnostics {
         saveSoon(plugin, config);
     }
 
-    void recordPruned(SlowTreesPlugin plugin, TreeEvolutionConfig config, Block block, TreeDna dna) {
-        placed.incrementAndGet();
+    void recordPrunedBatch(SlowTreesPlugin plugin, TreeEvolutionConfig config,
+            List<Block> blocks, TreeDna dna) {
+        if (blocks.isEmpty()) {
+            return;
+        }
+        pruned.addAndGet(blocks.size());
+        Block first = blocks.get(0);
+        Block last = blocks.get(blocks.size() - 1);
         event(config, "[ACTION][tree-evolution] prune role=STALE_CANOPY"
                 + " material=" + dna.species().leafMaterial()
-                + " at=" + format(block)
-                + " sample=" + dna.profileSampleId());
-        buildMap(block, config.debugMapRadius());
+                + " count=" + blocks.size()
+                + " first=" + format(first)
+                + " last=" + format(last)
+                + " stage=" + dna.maturityStage()
+                + " sample=" + dna.profileSampleId()
+                + " ## target-aware batch cleared old crown leaves without counting them as placements");
+        buildMap(first, config.debugMapRadius());
         saveSoon(plugin, config);
     }
 
@@ -436,6 +460,8 @@ final class TreeEvolutionDiagnostics {
 
         List<Map<String, Object>> layers = new ArrayList<>();
         List<Map<String, Object>> liveLayers = new ArrayList<>();
+        List<Map<String, Object>> voxelModelLayers = new ArrayList<>();
+        List<Map<String, Object>> voxelLiveStatusLayers = new ArrayList<>();
         int livePlaced = 0;
         int liveMissing = 0;
         int liveBlocked = 0;
@@ -447,11 +473,15 @@ final class TreeEvolutionDiagnostics {
             }
             List<String> rows = new ArrayList<>();
             List<String> liveRows = new ArrayList<>();
+            List<String> voxelModelRows = new ArrayList<>();
+            List<String> voxelLiveStatusRows = new ArrayList<>();
             boolean hasContent = false;
             boolean liveHasContent = false;
             for (int z = minZ; z <= maxZ; z++) {
                 StringBuilder row = new StringBuilder();
                 StringBuilder liveRow = new StringBuilder();
+                StringBuilder voxelModelRow = new StringBuilder();
+                StringBuilder voxelLiveStatusRow = new StringBuilder();
                 for (int x = minX; x <= maxX; x++) {
                     String key = x + ":" + y + ":" + z;
                     char token = planned.getOrDefault(key, '.');
@@ -481,9 +511,13 @@ final class TreeEvolutionDiagnostics {
                         liveHasContent = true;
                     }
                     liveRow.append(liveToken);
+                    voxelModelRow.append(voxelModelDigit(plannedBlock));
+                    voxelLiveStatusRow.append(voxelLiveStatusDigit(plannedBlock, liveToken));
                 }
                 rows.add(row.toString());
                 liveRows.add(liveRow.toString());
+                voxelModelRows.add(voxelModelRow.toString());
+                voxelLiveStatusRows.add(voxelLiveStatusRow.toString());
             }
             if (!hasContent) {
                 continue;
@@ -493,6 +527,16 @@ final class TreeEvolutionDiagnostics {
             layer.put("relative-y", y - dna.baseY());
             layer.put("rows", rows);
             layers.add(layer);
+            Map<String, Object> voxelLayer = new LinkedHashMap<>();
+            voxelLayer.put("y", y);
+            voxelLayer.put("relative-y", y - dna.baseY());
+            voxelLayer.put("rows", voxelModelRows);
+            voxelModelLayers.add(voxelLayer);
+            Map<String, Object> voxelLiveLayer = new LinkedHashMap<>();
+            voxelLiveLayer.put("y", y);
+            voxelLiveLayer.put("relative-y", y - dna.baseY());
+            voxelLiveLayer.put("rows", voxelLiveStatusRows);
+            voxelLiveStatusLayers.add(voxelLiveLayer);
             if (liveHasContent) {
                 Map<String, Object> liveLayer = new LinkedHashMap<>();
                 liveLayer.put("y", y);
@@ -509,6 +553,14 @@ final class TreeEvolutionDiagnostics {
         bounds.put("horizontal-radius-shown", radius);
         bounds.put("layer-step", layerStride);
         bounds.put("clipped", clipped);
+
+        Map<String, Object> voxelAxes = new LinkedHashMap<>();
+        voxelAxes.put("origin", "base/stump at world " + dna.baseX() + "," + dna.baseY() + "," + dna.baseZ());
+        voxelAxes.put("x-axis", "columns left-to-right are world x " + minX + ".." + maxX + " / relative " + (minX - dna.baseX()) + ".." + (maxX - dna.baseX()));
+        voxelAxes.put("z-axis", "rows top-to-bottom are world z " + minZ + ".." + maxZ + " / relative " + (minZ - dna.baseZ()) + ".." + (maxZ - dna.baseZ()));
+        voxelAxes.put("y-axis", "layers are bottom-to-top world y " + minY + ".." + maxY + " / relative " + (minY - dna.baseY()) + ".." + (maxY - dna.baseY()));
+        voxelAxes.put("center-column-index", dna.baseX() - minX);
+        voxelAxes.put("center-row-index", dna.baseZ() - minZ);
 
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (TreeBlockRole role : TreeBlockRole.values()) {
@@ -547,6 +599,14 @@ final class TreeEvolutionDiagnostics {
                 + (world == null ? " world=unavailable" : " world=" + world.getName());
         lastLive3dStatusCounts = liveCounts;
         lastLive3dLayers = liveLayers;
+        lastVoxelGridSummary = "voxel-grid species=" + dna.species().id()
+                + " stage=" + dna.maturityStage()
+                + " model-layers=" + voxelModelLayers.size()
+                + " radius=" + radius
+                + " ## numeric 4D-style grid: x/z/y model slices at the current growth stage";
+        lastVoxelGridAxes = voxelAxes;
+        lastVoxelModelLayers = voxelModelLayers;
+        lastVoxelLiveStatusLayers = voxelLiveStatusLayers;
     }
 
     private void countLiveRole(Map<TreeBlockRole, int[]> counts, PlannedTreeBlock plannedBlock, int index) {
@@ -601,6 +661,40 @@ final class TreeEvolutionDiagnostics {
         return 'X';
     }
 
+    private char voxelModelDigit(PlannedTreeBlock block) {
+        if (block == null) {
+            return '0';
+        }
+        return switch (block.role()) {
+            case TRUNK -> '1';
+            case CANOPY -> '2';
+            case BRANCH -> '3';
+            case ROOT -> '4';
+            case VINE -> '5';
+            case GROUND_DETAIL -> '6';
+            case FALLEN_LOG -> '7';
+            case SAPLING -> '8';
+        };
+    }
+
+    private char voxelLiveStatusDigit(PlannedTreeBlock plannedBlock, char liveToken) {
+        if (plannedBlock == null) {
+            return '0';
+        }
+        if (liveToken == '?') {
+            return '4';
+        }
+        if (liveToken == 'X') {
+            return '3';
+        }
+        if (Character.isUpperCase(liveToken)) {
+            return '1';
+        }
+        if (Character.isLowerCase(liveToken)) {
+            return '2';
+        }
+        return '0';
+    }
     private char symbolFor(PlannedTreeBlock block) {
         if (block.role() == TreeBlockRole.BRANCH && block.branchStep() == 1) {
             return 'A';
@@ -650,6 +744,7 @@ final class TreeEvolutionDiagnostics {
         yaml.set("counters.dna-loaded", dnaLoaded.get());
         yaml.set("counters.planned", planned.get());
         yaml.set("counters.placed", placed.get());
+        yaml.set("counters.pruned", pruned.get());
         yaml.set("counters.rejected", rejected.get());
         yaml.set("counters.stalled", stalled.get());
         yaml.set("counters.forced-steps", forcedSteps.get());
@@ -661,7 +756,7 @@ final class TreeEvolutionDiagnostics {
         yaml.set("last-stage-snapshot", lastStageSnapshot);
         yaml.set("last-lineage-summary", lastLineageSummary);
         yaml.set("recent-events", snapshot());
-        yaml.set("notes", "## Tree evolution trace. Includes sample inspiration, personality, rarity, ancient/age state, trunk width, canopy layers, lineage, map state, and next planned blocks without extra commands.");
+        yaml.set("notes", "## Tree evolution trace. Includes sample inspiration, personality, rarity, shape revision, stage cleanup, dedicated placed/pruned counters, target-aware prune batches, lineage, map state, and next planned blocks without extra commands.");
         saveYaml(plugin, yaml, "tree-evolution-trace.debug.yml");
     }
 
@@ -729,6 +824,25 @@ final class TreeEvolutionDiagnostics {
         yaml.set("live-3d.summary", lastLive3dSummary);
         yaml.set("live-3d.status-counts", lastLive3dStatusCounts);
         yaml.set("live-3d.layers", lastLive3dLayers);
+        yaml.set("voxel-grid.summary", lastVoxelGridSummary);
+        yaml.set("voxel-grid.axes", lastVoxelGridAxes);
+        yaml.set("voxel-grid.model.legend.0", "empty space in the shown cube");
+        yaml.set("voxel-grid.model.legend.1", "planned trunk / main support wood");
+        yaml.set("voxel-grid.model.legend.2", "planned leaves / canopy cloud");
+        yaml.set("voxel-grid.model.legend.3", "planned branch / limb wood");
+        yaml.set("voxel-grid.model.legend.4", "planned root");
+        yaml.set("voxel-grid.model.legend.5", "planned vine");
+        yaml.set("voxel-grid.model.legend.6", "planned understory / ground detail");
+        yaml.set("voxel-grid.model.legend.7", "planned fallen log");
+        yaml.set("voxel-grid.model.legend.8", "planned sapling / offspring");
+        yaml.set("voxel-grid.model.layers", lastVoxelModelLayers);
+        yaml.set("voxel-grid.live-status.legend.0", "no planned block at this coordinate");
+        yaml.set("voxel-grid.live-status.legend.1", "live world matches the model at this coordinate");
+        yaml.set("voxel-grid.live-status.legend.2", "model expects a block here, but it is still missing/placeable");
+        yaml.set("voxel-grid.live-status.legend.3", "model expects a block here, but a different non-replaceable block is blocking it");
+        yaml.set("voxel-grid.live-status.legend.4", "not checked because the chunk is unloaded or owned by another Folia region");
+        yaml.set("voxel-grid.live-status.layers", lastVoxelLiveStatusLayers);
+        yaml.set("voxel-grid.notes", "## Battleship-style numeric cube. Read each Y layer as a z/x grid. The model grid is the planned tree; live-status shows whether that exact coordinate has caught up.");
         yaml.set("recent-stage-events", stageSnapshot());
         yaml.set("notes", "## 3dDebug stage/shape trace. plan-3d is the target. live-3d overlays actual world progress: uppercase is placed, lowercase is still missing/placeable, X is blocked, ? is unloaded or another Folia region.");
         saveYaml(plugin, yaml, "tree-evolution-3dDebug.yml");
@@ -767,7 +881,7 @@ final class TreeEvolutionDiagnostics {
         try {
             yaml.save(file);
         } catch (IOException ex) {
-            plugin.getLogger().log(Level.WARNING, "Could not save SlowTrees " + name + ".", ex);
+            plugin.getLogger().log(Level.WARNING, "Could not save Evolution " + name + ".", ex);
         }
     }
 
@@ -794,6 +908,12 @@ final class TreeEvolutionDiagnostics {
         snapshot.put("blocked-attempts", dna.blockedAttempts());
         snapshot.put("stage-cleanup-burst", dna.stageCleanupBurst());
         snapshot.put("stage-growth-burst", dna.stageGrowthBurst());
+        snapshot.put("original-shape-blocks",
+                dna.originalShapeBlockCount());
+        snapshot.put("original-shape-logs",
+                dna.originalShapeLogCount());
+        snapshot.put("original-shape-leaves",
+                dna.originalShapeLeafCount());
         snapshot.put("virtual-stage-age", dna.age());
         snapshot.put("virtual-stage-progress", virtualStageProgress(config, dna));
         snapshot.put("target-height", dna.targetHeight());

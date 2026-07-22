@@ -1,11 +1,14 @@
 package org.slowtrees.treeevolution;
 
+import java.util.Collection;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 
 final class TreeDna {
+    static final int CURRENT_SHAPE_REVISION = 5;
     private final UUID worldId;
     private final int baseX;
     private final int baseY;
@@ -39,6 +42,7 @@ final class TreeDna {
     private final String profileSampleSource;
     private final String parentKey;
     private final int generation;
+    private final int shapeRevision;
     private TreeGrowthIntent currentIntent;
     private int planCursor;
     private int consecutivePrunes;
@@ -52,6 +56,8 @@ final class TreeDna {
     private long stalledUntilMillis;
     private int damageCount;
     private boolean stumpPresent;
+    private volatile Set<String> originalShapeLogs = Set.of();
+    private volatile Set<String> originalShapeLeaves = Set.of();
 
     TreeDna(
             UUID worldId,
@@ -87,6 +93,7 @@ final class TreeDna {
             String profileSampleSource,
             String parentKey,
             int generation,
+            int shapeRevision,
             TreeGrowthIntent currentIntent,
             int planCursor,
             int consecutivePrunes,
@@ -143,6 +150,7 @@ final class TreeDna {
         this.profileSampleSource = profileSampleSource == null || profileSampleSource.isBlank() ? "config.yml" : profileSampleSource;
         this.parentKey = parentKey == null || parentKey.isBlank() ? "wild" : parentKey;
         this.generation = Math.max(0, generation);
+        this.shapeRevision = Math.max(0, shapeRevision);
         this.currentIntent = currentIntent == null ? TreeGrowthIntent.HEIGHT : currentIntent;
         this.planCursor = Math.max(0, planCursor);
         this.consecutivePrunes = Math.max(0, consecutivePrunes);
@@ -202,6 +210,7 @@ final class TreeDna {
                 sample == null ? "config.yml" : sample.sourceFile(),
                 parentKey,
                 generation,
+                CURRENT_SHAPE_REVISION,
                 TreeGrowthIntent.HEIGHT,
                 0,
                 0,
@@ -235,7 +244,7 @@ final class TreeDna {
         int canopyLayerSpread = section.contains("canopy-layer-spread")
                 ? Math.max(0, section.getInt("canopy-layer-spread", 0))
                 : legacyCanopyLayerSpread(canopyLayerCount, section.getInt("canopy-radius", 2), seed);
-        return new TreeDna(
+        TreeDna dna = new TreeDna(
                 worldId,
                 section.getInt("base.x"),
                 section.getInt("base.y"),
@@ -269,6 +278,7 @@ final class TreeDna {
                 section.getString("profile-sample-source", "config.yml"),
                 section.getString("lineage.parent-key", "wild"),
                 section.getInt("lineage.generation", 0),
+                section.getInt("shape-revision", 0),
                 parseIntent(section.getString("growth.intent", "HEIGHT")),
                 section.getInt("growth.plan-cursor", 0),
                 section.getInt("growth.consecutive-prunes", 0),
@@ -283,6 +293,10 @@ final class TreeDna {
                 section.getInt("damage-count"),
                 section.getBoolean("stump-present", true)
         );
+        dna.restoreOriginalShape(
+                section.getStringList("transition.original-shape-logs"),
+                section.getStringList("transition.original-shape-leaves"));
+        return dna;
     }
 
     void writeTo(ConfigurationSection section) {
@@ -321,6 +335,7 @@ final class TreeDna {
         section.set("profile-sample-source", profileSampleSource);
         section.set("lineage.parent-key", parentKey);
         section.set("lineage.generation", generation);
+        section.set("shape-revision", shapeRevision);
         section.set("growth.intent", currentIntent.name());
         section.set("growth.plan-cursor", planCursor);
         section.set("growth.consecutive-prunes", consecutivePrunes);
@@ -328,6 +343,10 @@ final class TreeDna {
         section.set("growth.last-intent-change-age", lastIntentChangeAge);
         section.set("growth.stage-cleanup-burst", stageCleanupBurst);
         section.set("growth.stage-growth-burst", stageGrowthBurst);
+        section.set("transition.original-shape-logs",
+                originalShapeLogs.stream().sorted().toList());
+        section.set("transition.original-shape-leaves",
+                originalShapeLeaves.stream().sorted().toList());
         section.set("maturity-stage", maturityStage.name());
         section.set("last-growth-millis", lastGrowthMillis);
         section.set("stalled-until-millis", stalledUntilMillis);
@@ -562,6 +581,10 @@ final class TreeDna {
         return generation;
     }
 
+    int shapeRevision() {
+        return shapeRevision;
+    }
+
     TreeGrowthIntent currentIntent() {
         return currentIntent;
     }
@@ -633,10 +656,75 @@ final class TreeDna {
         }
     }
 
+    void completeStageCleanup() {
+        // ## The persisted value now acts as an active transition marker. Cleanup
+        // finishes only after a full scan returns clear, never after an attempt cap.
+        stageCleanupBurst = 0;
+        consecutivePrunes = 0;
+        blockedAttempts = 0;
+    }
+
     void consumeStageGrowthBurst() {
         if (stageGrowthBurst > 0) {
             stageGrowthBurst--;
         }
+    }
+
+    void completeStageGrowthBurst() {
+        // ## A structural stage can finish before its action allowance is spent.
+        // Clear stale allowance so focused scheduling may move to another tree.
+        stageGrowthBurst = 0;
+        blockedAttempts = 0;
+        originalShapeLogs = Set.of();
+        originalShapeLeaves = Set.of();
+    }
+
+    boolean hasOriginalShapeSnapshot() {
+        return !originalShapeLogs.isEmpty()
+                || !originalShapeLeaves.isEmpty();
+    }
+
+    int originalShapeBlockCount() {
+        return originalShapeLogs.size() + originalShapeLeaves.size();
+    }
+
+    int originalShapeLogCount() {
+        return originalShapeLogs.size();
+    }
+
+    int originalShapeLeafCount() {
+        return originalShapeLeaves.size();
+    }
+
+    Set<String> originalShapeLogs() {
+        return originalShapeLogs;
+    }
+
+    Set<String> originalShapeLeaves() {
+        return originalShapeLeaves;
+    }
+
+    boolean wasOriginalShapeLeaf(String blockKey) {
+        return originalShapeLeaves.contains(blockKey);
+    }
+
+    void captureOriginalShape(Collection<String> logKeys,
+            Collection<String> leafKeys) {
+        // ## The transition owns an immutable block-level snapshot. Later live
+        // tree changes cannot silently redefine which source blocks belonged
+        // to the original trunk or crown.
+        originalShapeLogs = immutableKeys(logKeys);
+        originalShapeLeaves = immutableKeys(leafKeys);
+    }
+
+    private void restoreOriginalShape(Collection<String> logKeys,
+            Collection<String> leafKeys) {
+        captureOriginalShape(logKeys, leafKeys);
+    }
+
+    private Set<String> immutableKeys(Collection<String> blockKeys) {
+        return blockKeys == null || blockKeys.isEmpty()
+                ? Set.of() : Set.copyOf(blockKeys);
     }
 
     TreeMaturityStage maturityStage() {
@@ -649,11 +737,13 @@ final class TreeDna {
         if (maturityStage == before) {
             return false;
         }
+        // ## A positive cleanup marker keeps the transition active until a full
+        // target-aware crown scan is clear; the value remains useful in debug.
         stageCleanupBurst = switch (maturityStage) {
-            case SMALL -> 0;
-            case MEDIUM -> 1;
-            case MATURE -> 2;
-            case ANCIENT -> 3;
+            case SMALL -> 2;
+            case MEDIUM -> 6;
+            case MATURE -> 8;
+            case ANCIENT -> 10;
         };
         stageGrowthBurst = switch (maturityStage) {
             case SMALL -> 0;
@@ -822,6 +912,8 @@ final class TreeDna {
     String planSignature(boolean rootsEnabled, org.bukkit.block.Biome biome) {
         return species.id()
                 + "|" + seed
+                + "|" + personality
+                + "|" + rarity
                 + "|" + targetHeight
                 + "|" + branchCount
                 + "|" + minBranchLength + "-" + maxBranchLength
@@ -880,7 +972,7 @@ final class TreeDna {
             return TreePersonality.FORKED;
         }
         if (text.contains("bush") || text.contains("young") || text.contains("stump")) {
-            return TreePersonality.SPARSE;
+            return species == TreeSpecies.BIRCH ? TreePersonality.TALL : TreePersonality.BALANCED;
         }
         if (species == TreeSpecies.SPRUCE) {
             return random.nextBoolean() ? TreePersonality.SPIRE : TreePersonality.TALL;
@@ -895,7 +987,7 @@ final class TreeDna {
             return random.nextBoolean() ? TreePersonality.DENSE : TreePersonality.WIDE;
         }
         if (species == TreeSpecies.BIRCH) {
-            return random.nextBoolean() ? TreePersonality.TALL : TreePersonality.SPARSE;
+            return random.nextBoolean() ? TreePersonality.TALL : TreePersonality.BALANCED;
         }
         return switch (random.nextInt(8)) {
             case 0 -> TreePersonality.WIDE;

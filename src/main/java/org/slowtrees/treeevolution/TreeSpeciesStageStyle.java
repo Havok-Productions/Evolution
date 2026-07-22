@@ -41,8 +41,8 @@ final class TreeSpeciesStageStyle {
 
     static int branchCount(TreeDna dna) {
         double scale = switch (dna.maturityStage()) {
-            case SMALL -> 0.18D;
-            case MEDIUM -> 0.46D;
+            case SMALL -> 0.34D;
+            case MEDIUM -> 0.62D;
             case MATURE -> 1.0D;
             case ANCIENT -> 1.22D;
         };
@@ -98,8 +98,8 @@ final class TreeSpeciesStageStyle {
         int anchorHeight = Math.max(1, anchorY - dna.baseY() + 1);
         double heightProgress = Math.min(1.0D, anchorHeight / (double) visibleHeight);
         int stageCap = switch (dna.maturityStage()) {
-            case SMALL -> Math.max(1, (int) Math.round(visibleHeight * 0.12D));
-            case MEDIUM -> Math.max(2, (int) Math.round(visibleHeight * 0.20D));
+            case SMALL -> Math.max(2, (int) Math.round(visibleHeight * 0.20D));
+            case MEDIUM -> Math.max(3, (int) Math.round(visibleHeight * 0.30D));
             case MATURE -> Math.max(3, (int) Math.round(visibleHeight * 0.34D));
             case ANCIENT -> Math.max(4, (int) Math.round(visibleHeight * 0.42D));
         };
@@ -235,8 +235,8 @@ final class TreeSpeciesStageStyle {
 
     private static int horizontalRadius(TreeDna dna, int baseRadius, boolean xAxis) {
         double scale = switch (dna.maturityStage()) {
-            case SMALL -> 0.50D;
-            case MEDIUM -> 0.72D;
+            case SMALL -> 0.62D;
+            case MEDIUM -> 0.82D;
             case MATURE -> 1.0D;
             case ANCIENT -> 1.18D;
         };
@@ -303,9 +303,9 @@ final class TreeSpeciesStageStyle {
             };
             case OAK -> switch (dna.maturityStage()) {
                 case SMALL -> 4;
-                case MEDIUM -> 5;
-                case MATURE -> 6;
-                case ANCIENT -> 7;
+                case MEDIUM -> 6;
+                case MATURE -> 7;
+                case ANCIENT -> 8;
             };
         };
         return Math.max(floor, Math.min(cap, radius));

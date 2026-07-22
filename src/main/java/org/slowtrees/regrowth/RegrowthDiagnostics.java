@@ -105,7 +105,7 @@ final class RegrowthDiagnostics {
         try {
             yaml.save(file);
         } catch (IOException ex) {
-            plugin.getLogger().log(Level.WARNING, "Could not save SlowTrees RegrowthDebug.yml.", ex);
+            plugin.getLogger().log(Level.WARNING, "Could not save Evolution RegrowthDebug.yml.", ex);
         }
     }
 

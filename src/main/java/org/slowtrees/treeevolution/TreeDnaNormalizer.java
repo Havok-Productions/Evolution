@@ -2,24 +2,39 @@ package org.slowtrees.treeevolution;
 
 final class TreeDnaNormalizer {
     NormalizedDna normalize(TreeDna dna) {
-        TreeMaturityStage stage = normalizedStage(dna);
-        int targetHeight = Math.max(targetHeightFloor(dna, stage), Math.min(dna.targetHeight(), targetHeightCap(dna)));
-        int branchCount = Math.max(TreeShapeProfile.branchCountFloor(dna.species(), dna.personality(), targetHeight), Math.min(dna.branchCount(), branchCountCap(dna)));
-        int branchLengthFloor = TreeShapeProfile.branchLengthFloor(dna.species(), dna.personality(), targetHeight);
-        int minBranchLength = Math.min(Math.max(dna.minBranchLength(), Math.min(2, branchLengthFloor)), branchLengthCap(dna));
-        int maxBranchLength = Math.max(branchLengthFloor, Math.min(dna.maxBranchLength(), branchLengthCap(dna)));
-        int canopyRadiusX = Math.max(TreeShapeProfile.canopyRadiusFloor(dna.species(), dna.personality(), dna.rarity(), targetHeight, true), Math.min(dna.canopyRadiusX(), canopyRadiusCap(dna, true)));
-        int canopyRadiusZ = Math.max(TreeShapeProfile.canopyRadiusFloor(dna.species(), dna.personality(), dna.rarity(), targetHeight, false), Math.min(dna.canopyRadiusZ(), canopyRadiusCap(dna, false)));
+        return normalize(dna, TreeMaturityStage.ANCIENT);
+    }
+
+    NormalizedDna normalize(TreeDna dna, TreeMaturityStage maximumStage) {
+        boolean giantStagesHeld = maximumStage.ordinal() < TreeMaturityStage.ANCIENT.ordinal();
+        boolean shapeRevisionChanged = dna.shapeRevision() < TreeDna.CURRENT_SHAPE_REVISION;
+        TreePersonality personality = normalizedPersonality(dna, giantStagesHeld);
+        TreeRarity rarity = normalizedRarity(dna, giantStagesHeld);
+        TreeMaturityStage stage = normalizedStage(dna, maximumStage);
+        boolean stageDowngraded = stage.ordinal() < dna.maturityStage().ordinal();
+        int targetHeight = Math.max(
+                targetHeightFloor(dna, stage, personality, rarity),
+                Math.min(dna.targetHeight(), targetHeightCap(dna, personality, rarity, giantStagesHeld))
+        );
+        int branchCount = Math.max(TreeShapeProfile.branchCountFloor(dna.species(), personality, targetHeight), Math.min(dna.branchCount(), branchCountCap(dna, personality, rarity)));
+        int branchLengthFloor = TreeShapeProfile.branchLengthFloor(dna.species(), personality, targetHeight);
+        int minBranchLength = Math.min(Math.max(dna.minBranchLength(), Math.min(2, branchLengthFloor)), branchLengthCap(dna, personality, rarity));
+        int maxBranchLength = Math.max(branchLengthFloor, Math.min(dna.maxBranchLength(), branchLengthCap(dna, personality, rarity)));
+        int canopyRadiusX = Math.max(TreeShapeProfile.canopyRadiusFloor(dna.species(), personality, rarity, targetHeight, true), Math.min(dna.canopyRadiusX(), canopyRadiusCap(dna, personality, rarity, true)));
+        int canopyRadiusZ = Math.max(TreeShapeProfile.canopyRadiusFloor(dna.species(), personality, rarity, targetHeight, false), Math.min(dna.canopyRadiusZ(), canopyRadiusCap(dna, personality, rarity, false)));
         int canopyRadius = Math.max(canopyRadiusX, canopyRadiusZ);
         int canopyRadiusY = Math.max(TreeShapeProfile.canopyVerticalRadiusFloor(dna.species(), canopyRadius), Math.min(dna.canopyRadiusY(), canopyVerticalCap(dna, canopyRadius)));
         double canopyDensity = Math.min(dna.canopyDensity(), canopyDensityCap(dna));
-        int trunkWidth = Math.max(TreeShapeProfile.trunkWidthFloor(dna.species(), dna.personality(), dna.rarity(), targetHeight), Math.min(dna.trunkWidth(), trunkWidthCap(dna)));
-        int canopyLayerCount = Math.max(TreeShapeProfile.canopyLayerFloor(dna.species(), dna.personality(), dna.rarity(), targetHeight), Math.min(dna.canopyLayerCount(), canopyLayerCountCap(dna)));
+        int trunkWidth = Math.max(TreeShapeProfile.trunkWidthFloor(dna.species(), personality, rarity, targetHeight), Math.min(dna.trunkWidth(), trunkWidthCap(dna, personality, rarity)));
+        int canopyLayerCount = Math.max(TreeShapeProfile.canopyLayerFloor(dna.species(), personality, rarity, targetHeight), Math.min(dna.canopyLayerCount(), canopyLayerCountCap(dna, personality, rarity)));
         int canopyLayerSpread = Math.max(canopyRadius, Math.min(dna.canopyLayerSpread(), canopyLayerSpreadCap(dna)));
         double branchStartRatio = Math.min(dna.branchStartRatio(), branchStartCap(dna));
         double branchRiseChance = Math.min(dna.branchRiseChance(), branchRiseCap(dna));
 
-        boolean changed = stage != dna.maturityStage()
+        boolean changed = shapeRevisionChanged
+                || stage != dna.maturityStage()
+                || personality != dna.personality()
+                || rarity != dna.rarity()
                 || targetHeight != dna.targetHeight()
                 || branchCount != dna.branchCount()
                 || minBranchLength != dna.minBranchLength()
@@ -44,8 +59,8 @@ final class TreeDnaNormalizer {
                 dna.baseZ(),
                 dna.species(),
                 dna.seed(),
-                dna.personality(),
-                dna.rarity(),
+                personality,
+                rarity,
                 targetHeight,
                 branchCount,
                 minBranchLength,
@@ -71,13 +86,22 @@ final class TreeDnaNormalizer {
                 dna.profileSampleSource(),
                 dna.parentKey(),
                 dna.generation(),
-                normalizedIntent(dna.currentIntent(), stage),
+                TreeDna.CURRENT_SHAPE_REVISION,
+                stageDowngraded || shapeRevisionChanged
+                        ? TreeGrowthIntent.CLEANUP
+                        : normalizedIntent(dna.currentIntent(), stage),
                 changed ? 0 : dna.planCursor(),
                 0,
-                Math.min(3, dna.blockedAttempts()),
+                stageDowngraded ? 0 : Math.min(3, dna.blockedAttempts()),
                 Math.min(dna.lastIntentChangeAge(), dna.age()),
-                Math.min(dna.stageCleanupBurst(), 3),
-                Math.min(dna.stageGrowthBurst(), 12),
+                stageDowngraded ? 8
+                        : shapeRevisionChanged
+                                ? Math.max(dna.stageCleanupBurst(), transitionCleanupBurst(stage))
+                                : Math.min(dna.stageCleanupBurst(), 8),
+                stageDowngraded ? 6
+                        : shapeRevisionChanged
+                                ? Math.max(dna.stageGrowthBurst(), transitionGrowthBurst(stage))
+                                : Math.min(dna.stageGrowthBurst(), 12),
                 dna.age(),
                 stage,
                 dna.lastGrowthMillis(),
@@ -85,10 +109,17 @@ final class TreeDnaNormalizer {
                 Math.min(8, dna.damageCount()),
                 dna.stumpPresent()
         );
+        // ## Normalization changes the future plan, never the persisted source
+        // evidence used to finish an already active canopy transition.
+        normalized.captureOriginalShape(dna.originalShapeLogs(),
+                dna.originalShapeLeaves());
         return new NormalizedDna(normalized, true, summary(dna, normalized));
     }
 
-    private TreeMaturityStage normalizedStage(TreeDna dna) {
+    private TreeMaturityStage normalizedStage(TreeDna dna, TreeMaturityStage maximumStage) {
+        if (dna.maturityStage().ordinal() > maximumStage.ordinal()) {
+            return maximumStage;
+        }
         if (dna.maturityStage() == TreeMaturityStage.ANCIENT && dna.age() < 24) {
             return TreeMaturityStage.MEDIUM;
         }
@@ -98,6 +129,59 @@ final class TreeDnaNormalizer {
         return dna.maturityStage();
     }
 
+    private TreePersonality normalizedPersonality(TreeDna dna, boolean ancientStageOnHold) {
+        if (dna.personality() == TreePersonality.SPARSE) {
+            // ## Sparse DNA produced narrow leaf columns. Keep birch slim by height,
+            // while giving every migrated crown enough horizontal cloud mass.
+            return dna.species() == TreeSpecies.BIRCH
+                    ? TreePersonality.TALL : TreePersonality.BALANCED;
+        }
+        if (!ancientStageOnHold || dna.personality() != TreePersonality.ANCIENT_LANDMARK) {
+            return dna.personality();
+        }
+        return switch (dna.species()) {
+            case OAK, DARK_OAK, MANGROVE -> TreePersonality.WIDE;
+            case BIRCH, JUNGLE -> TreePersonality.TALL;
+            case SPRUCE, CHERRY -> TreePersonality.LAYERED;
+            case ACACIA -> TreePersonality.UMBRELLA;
+        };
+    }
+
+    private int transitionCleanupBurst(TreeMaturityStage stage) {
+        return switch (stage) {
+            case SMALL -> 2;
+            case MEDIUM -> 6;
+            case MATURE -> 8;
+            case ANCIENT -> 10;
+        };
+    }
+
+    private int transitionGrowthBurst(TreeMaturityStage stage) {
+        // ## A migrated or repaired tree receives enough deterministic work to
+        // refill its planned frame and fluffy crown immediately after cleanup.
+        return switch (stage) {
+            case SMALL -> 6;
+            case MEDIUM -> 12;
+            case MATURE -> 16;
+            case ANCIENT -> 20;
+        };
+    }
+
+    private TreeRarity normalizedRarity(TreeDna dna, boolean ancientStageOnHold) {
+        return ancientStageOnHold && dna.rarity() == TreeRarity.LANDMARK ? TreeRarity.RARE : dna.rarity();
+    }
+
+    private int fancyMatureHeightCap(TreeSpecies species) {
+        return switch (species) {
+            case OAK -> 22;
+            case BIRCH -> 26;
+            case SPRUCE -> 32;
+            case JUNGLE -> 40;
+            case ACACIA -> 20;
+            case DARK_OAK, MANGROVE -> 24;
+            case CHERRY -> 22;
+        };
+    }
     private TreeGrowthIntent normalizedIntent(TreeGrowthIntent intent, TreeMaturityStage stage) {
         if (stage == TreeMaturityStage.SMALL || stage == TreeMaturityStage.MEDIUM) {
             return switch (intent) {
@@ -108,7 +192,7 @@ final class TreeDnaNormalizer {
         return intent;
     }
 
-    private int targetHeightCap(TreeDna dna) {
+    private int targetHeightCap(TreeDna dna, TreePersonality personality, TreeRarity rarity, boolean ancientStageOnHold) {
         int cap = switch (dna.species()) {
             case BIRCH -> 28;
             case SPRUCE -> 34;
@@ -119,16 +203,16 @@ final class TreeDnaNormalizer {
             case CHERRY -> 26;
             case OAK -> 30;
         };
-        if (dna.rarity() == TreeRarity.RARE) {
+        if (rarity == TreeRarity.RARE) {
             cap += 8;
-        } else if (dna.rarity() == TreeRarity.LANDMARK || dna.personality() == TreePersonality.ANCIENT_LANDMARK) {
+        } else if (rarity == TreeRarity.LANDMARK || personality == TreePersonality.ANCIENT_LANDMARK) {
             cap += 18;
         }
-        return cap;
+        return ancientStageOnHold ? Math.min(cap, fancyMatureHeightCap(dna.species())) : cap;
     }
 
-    private int targetHeightFloor(TreeDna dna, TreeMaturityStage stage) {
-        int base = TreeShapeProfile.targetHeightFloor(dna.species(), dna.personality(), dna.rarity());
+    private int targetHeightFloor(TreeDna dna, TreeMaturityStage stage, TreePersonality personality, TreeRarity rarity) {
+        int base = TreeShapeProfile.targetHeightFloor(dna.species(), personality, rarity);
         int stageFloor = switch (stage) {
             case SMALL -> Math.max(8, (int) Math.round(base * 0.42D));
             case MEDIUM -> Math.max(10, (int) Math.round(base * 0.68D));
@@ -138,7 +222,7 @@ final class TreeDnaNormalizer {
         return Math.max(base, stageFloor);
     }
 
-    private int branchCountCap(TreeDna dna) {
+    private int branchCountCap(TreeDna dna, TreePersonality personality, TreeRarity rarity) {
         int cap = switch (dna.species()) {
             case BIRCH -> 8;
             case SPRUCE -> 18;
@@ -149,28 +233,28 @@ final class TreeDnaNormalizer {
             case CHERRY -> 12;
             case OAK -> 12;
         };
-        if (dna.rarity() == TreeRarity.RARE) {
+        if (rarity == TreeRarity.RARE) {
             cap += 4;
-        } else if (dna.rarity() == TreeRarity.LANDMARK || dna.personality() == TreePersonality.ANCIENT_LANDMARK) {
+        } else if (rarity == TreeRarity.LANDMARK || personality == TreePersonality.ANCIENT_LANDMARK) {
             cap += 10;
         }
         return cap;
     }
 
-    private int branchLengthCap(TreeDna dna) {
+    private int branchLengthCap(TreeDna dna, TreePersonality personality, TreeRarity rarity) {
         int cap = switch (dna.species()) {
             case BIRCH -> 4;
             case SPRUCE -> 5;
             case JUNGLE, ACACIA -> 6;
             case DARK_OAK, MANGROVE, OAK, CHERRY -> 5;
         };
-        if (dna.rarity() == TreeRarity.LANDMARK || dna.personality() == TreePersonality.ANCIENT_LANDMARK) {
+        if (rarity == TreeRarity.LANDMARK || personality == TreePersonality.ANCIENT_LANDMARK) {
             cap += 2;
         }
         return cap;
     }
 
-    private int canopyRadiusCap(TreeDna dna, boolean xAxis) {
+    private int canopyRadiusCap(TreeDna dna, TreePersonality personality, TreeRarity rarity, boolean xAxis) {
         int cap = switch (dna.species()) {
             case BIRCH -> 3;
             case SPRUCE -> 4;
@@ -181,9 +265,9 @@ final class TreeDnaNormalizer {
             case CHERRY -> 5;
             case OAK -> 5;
         };
-        if (dna.rarity() == TreeRarity.RARE) {
+        if (rarity == TreeRarity.RARE) {
             cap++;
-        } else if (dna.rarity() == TreeRarity.LANDMARK || dna.personality() == TreePersonality.ANCIENT_LANDMARK) {
+        } else if (rarity == TreeRarity.LANDMARK || personality == TreePersonality.ANCIENT_LANDMARK) {
             cap += 2;
         }
         return cap;
@@ -209,27 +293,27 @@ final class TreeDnaNormalizer {
         };
     }
 
-    private int trunkWidthCap(TreeDna dna) {
+    private int trunkWidthCap(TreeDna dna, TreePersonality personality, TreeRarity rarity) {
         int cap = switch (dna.species()) {
             case JUNGLE -> 4;
             case DARK_OAK -> 5;
             case MANGROVE -> 4;
             default -> 2;
         };
-        if (dna.rarity() == TreeRarity.LANDMARK || dna.personality() == TreePersonality.ANCIENT_LANDMARK || dna.personality() == TreePersonality.HOLLOW) {
+        if (rarity == TreeRarity.LANDMARK || personality == TreePersonality.ANCIENT_LANDMARK || personality == TreePersonality.HOLLOW) {
             cap += 2;
         }
         return Math.min(6, cap);
     }
 
-    private int canopyLayerCountCap(TreeDna dna) {
+    private int canopyLayerCountCap(TreeDna dna, TreePersonality personality, TreeRarity rarity) {
         int cap = switch (dna.species()) {
             case SPRUCE -> 4;
             case JUNGLE, DARK_OAK -> 3;
             case CHERRY -> 2;
             default -> 2;
         };
-        if (dna.rarity() == TreeRarity.LANDMARK || dna.personality() == TreePersonality.ANCIENT_LANDMARK) {
+        if (rarity == TreeRarity.LANDMARK || personality == TreePersonality.ANCIENT_LANDMARK) {
             cap++;
         }
         return cap;
@@ -252,7 +336,9 @@ final class TreeDnaNormalizer {
     }
 
     private String summary(TreeDna before, TreeDna after) {
-        return "target-height " + before.targetHeight() + "->" + after.targetHeight()
+        return "shape-revision " + before.shapeRevision() + "->" + after.shapeRevision()
+                + ", personality " + before.personality() + "->" + after.personality()
+                + ", target-height " + before.targetHeight() + "->" + after.targetHeight()
                 + ", stage " + before.maturityStage() + "->" + after.maturityStage()
                 + ", branches " + before.branchCount() + "->" + after.branchCount()
                 + ", canopy " + before.canopyRadiusX() + "x" + before.canopyRadiusY() + "x" + before.canopyRadiusZ()

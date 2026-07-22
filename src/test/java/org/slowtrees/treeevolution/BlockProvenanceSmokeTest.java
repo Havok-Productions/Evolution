@@ -73,6 +73,7 @@ public final class BlockProvenanceSmokeTest {
                 "BlockProvenanceSmokeTest",
                 "wild",
                 0,
+                TreeDna.CURRENT_SHAPE_REVISION,
                 TreeGrowthIntent.HEIGHT,
                 0,
                 0,

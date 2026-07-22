@@ -4,12 +4,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.slowtrees</groupId>
-    <artifactId>slowtrees</artifactId>
+    <artifactId>evolution</artifactId>
     <version>0.1.0</version>
     <packaging>jar</packaging>
 
-    <name>SlowTrees</name>
-    <description>Folia-safe vanilla tree regrowth.</description>
+    <name>Evolution</name>
+    <description>Folia-safe natural world evolution.</description>
 
     <properties>
         <maven.compiler.release>25</maven.compiler.release>

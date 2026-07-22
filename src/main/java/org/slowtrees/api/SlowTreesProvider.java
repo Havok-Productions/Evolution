@@ -11,7 +11,7 @@ public final class SlowTreesProvider {
     public static SlowTreesApi get() {
         SlowTreesApi current = api;
         if (current == null) {
-            throw new IllegalStateException("SlowTrees API is not available.");
+            throw new IllegalStateException("Evolution API is not available.");
         }
         return current;
     }

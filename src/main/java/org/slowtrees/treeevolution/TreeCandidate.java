@@ -15,7 +15,8 @@ record TreeCandidate(
         TreeSpecies species,
         int connectedLogs,
         int connectedLeaves,
-        Set<String> naturalKeys
+        Set<String> naturalKeys,
+        boolean ownershipComplete
 ) {
     Block baseBlock() {
         return world.getBlockAt(baseX, baseY, baseZ);

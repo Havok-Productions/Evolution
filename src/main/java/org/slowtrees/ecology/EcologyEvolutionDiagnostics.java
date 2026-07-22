@@ -233,7 +233,8 @@ final class EcologyEvolutionDiagnostics {
         yaml.set("ecology-paths.coastal", BiomeEcologyPath.COASTAL.progressionNote());
         yaml.set("ecology-paths.alpine", BiomeEcologyPath.ALPINE.progressionNote());
         yaml.set("ecology-paths.fungal", BiomeEcologyPath.FUNGAL.progressionNote());
-        yaml.set("notes", "## EvolutionDebug.yml traces biome ecology paths, microhabitats, stages, and slow tree/terrain enrichment decisions without copying external mod assets.");
+        yaml.set("microhabitat-templates", EcologyMicrohabitatTemplate.keys());
+        yaml.set("notes", "## EvolutionDebug.yml traces biome ecology paths, microhabitats, stages, explicit flora templates, and slow tree/terrain enrichment decisions without copying external mod assets.");
 
         File file = new File(plugin.getDataFolder(), "EvolutionDebug.yml");
         File parent = file.getParentFile();
@@ -244,7 +245,7 @@ final class EcologyEvolutionDiagnostics {
         try {
             yaml.save(file);
         } catch (IOException ex) {
-            plugin.getLogger().log(Level.WARNING, "Could not save SlowTrees EvolutionDebug.yml.", ex);
+            plugin.getLogger().log(Level.WARNING, "Could not save Evolution EvolutionDebug.yml.", ex);
         }
     }
 

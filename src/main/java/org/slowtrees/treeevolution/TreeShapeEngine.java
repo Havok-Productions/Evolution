@@ -42,14 +42,27 @@ final class TreeShapeEngine {
             score += Math.max(0, 24 - Math.abs(heightProgress - branchStart) * 30);
             score += horizontal >= 1 ? 12 : -18;
         } else if (block.role() == TreeBlockRole.CANOPY) {
+            int activeTopY = Math.min(topY, Math.max(candidate.topY(), dna.baseY() + 2));
             score += Math.max(0, 30 - Math.abs(block.y() - topY) * 6);
+            if (intent == TreeGrowthIntent.CANOPY) {
+                int activeHorizontal = Math.max(Math.abs(block.x() - dna.trunkXAt(activeTopY)), Math.abs(block.z() - dna.trunkZAt(activeTopY)));
+                score += Math.max(0, 42 - Math.abs(block.y() - activeTopY) * 9 - activeHorizontal * 4);
+                if (block.y() > activeTopY + 3) {
+                    score -= 28;
+                }
+            }
             if (candidate.connectedLeaves() < Math.max(10, candidate.connectedLogs())) {
-                score += 18;
+                score += 24;
             }
             if (Math.abs(block.x() - dna.trunkXAt(topY)) <= 2
                     && Math.abs(block.z() - dna.trunkZAt(topY)) <= 2
                     && Math.abs(block.y() - topY) <= 2) {
                 score += 20;
+            }
+            if (Math.abs(block.x() - dna.trunkXAt(activeTopY)) <= 2
+                    && Math.abs(block.z() - dna.trunkZAt(activeTopY)) <= 2
+                    && Math.abs(block.y() - activeTopY) <= 2) {
+                score += 24;
             }
         }
 

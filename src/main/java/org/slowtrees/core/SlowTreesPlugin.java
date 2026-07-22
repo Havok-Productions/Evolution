@@ -1,5 +1,6 @@
 package org.slowtrees.core;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import org.slowtrees.api.SlowTreesApi;
@@ -12,8 +13,10 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.slowtrees.ecology.EcologyEvolutionFeature;
 import org.slowtrees.meadow.MeadowGrowthFeature;
 import org.slowtrees.nether.NetherCorruptionFeature;
+import org.slowtrees.puddles.PuddleFeature;
 import org.slowtrees.regrowth.PlantRegrowthFeature;
 import org.slowtrees.treeevolution.TreeEvolutionFeature;
+import org.slowtrees.waves.WaveFeature;
 import org.slowtrees.wind.WindFeature;
 
 public final class SlowTreesPlugin extends JavaPlugin {
@@ -26,6 +29,8 @@ public final class SlowTreesPlugin extends JavaPlugin {
     private TreeEvolutionFeature treeEvolutionFeature;
     private NetherCorruptionFeature netherFeature;
     private WindFeature windFeature;
+    private PuddleFeature puddleFeature;
+    private WaveFeature waveFeature;
     private SlowTreesApi api;
 
     @Override
@@ -46,12 +51,16 @@ public final class SlowTreesPlugin extends JavaPlugin {
         treeEvolutionFeature = new TreeEvolutionFeature(this);
         netherFeature = new NetherCorruptionFeature(this);
         windFeature = new WindFeature(this);
+        puddleFeature = new PuddleFeature(this);
+        waveFeature = new WaveFeature(this);
         registerFeature(regrowthFeature);
         registerFeature(meadowFeature);
         registerFeature(ecologyFeature);
         registerFeature(treeEvolutionFeature);
         registerFeature(netherFeature);
         registerFeature(windFeature);
+        registerFeature(puddleFeature);
+        registerFeature(waveFeature);
         for (PluginFeature feature : features) {
             architecturePathDebug.trace(this, "core", "feature.enable.start", feature.getClass().getSimpleName());
             try (ResourceReporter.ReportSample sample = resourceReporter().begin("core", "feature.enable")) {
@@ -63,7 +72,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
         api = new SlowTreesApiImpl(this);
         SlowTreesProvider.register(api);
         architecturePathDebug.trace(this, "core", "api.register", "SlowTreesProvider");
-        getLogger().info("SlowTrees enabled with " + features.size() + " feature module(s).");
+        getLogger().info("Evolution enabled with " + features.size() + " feature module(s).");
         architecturePathDebug.trace(this, "core", "plugin.enable.done", "features=" + features.size());
     }
 
@@ -107,7 +116,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
                 sample.changedUnits(features.size()).detail("features=" + features.size());
             }
             pathDebug().trace(this, "core", "command.reload", "features reloaded");
-            sender.sendMessage("SlowTrees config reloaded.");
+            sender.sendMessage("Evolution config reloaded.");
             return true;
         }
 
@@ -126,6 +135,23 @@ public final class SlowTreesPlugin extends JavaPlugin {
 
         sender.sendMessage("Usage: /" + label + " <reload|status|pending|tree>");
         return true;
+    }
+
+    private void migrateLegacyDataFolder() {
+        File current = getDataFolder();
+        File parent = current.getParentFile();
+        if (parent == null || current.exists()) {
+            return;
+        }
+        File legacy = new File(parent, "SlowTrees");
+        if (!legacy.isDirectory()) {
+            return;
+        }
+        if (legacy.renameTo(current)) {
+            getLogger().info("Migrated legacy SlowTrees data folder to Evolution.");
+        } else {
+            getLogger().warning("Could not migrate plugins/SlowTrees to plugins/Evolution. Existing Evolution config will be used.");
+        }
     }
 
     private void registerFeature(PluginFeature feature) {
@@ -187,5 +213,13 @@ public final class SlowTreesPlugin extends JavaPlugin {
 
     public WindFeature windFeature() {
         return windFeature;
+    }
+
+    public PuddleFeature puddleFeature() {
+        return puddleFeature;
+    }
+
+    public WaveFeature waveFeature() {
+        return waveFeature;
     }
 }

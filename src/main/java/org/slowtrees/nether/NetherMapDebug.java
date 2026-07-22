@@ -150,7 +150,7 @@ final class NetherMapDebug {
         try {
             yaml.save(file);
         } catch (IOException ex) {
-            plugin.getLogger().log(Level.WARNING, "Could not save SlowTrees MapDebug.yml.", ex);
+            plugin.getLogger().log(Level.WARNING, "Could not save Evolution MapDebug.yml.", ex);
         }
     }
 

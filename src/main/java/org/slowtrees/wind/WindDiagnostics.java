@@ -153,7 +153,7 @@ final class WindDiagnostics {
         try {
             yaml.save(file);
         } catch (IOException ex) {
-            plugin.getLogger().log(Level.WARNING, "Could not save SlowTrees debug.yml.", ex);
+            plugin.getLogger().log(Level.WARNING, "Could not save Evolution debug.yml.", ex);
         }
     }
 

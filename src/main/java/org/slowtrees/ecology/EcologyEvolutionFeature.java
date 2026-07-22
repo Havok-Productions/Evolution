@@ -278,6 +278,10 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
             }
         }
 
+        if (random.nextInt(100) < currentConfig.plantPaletteChancePercent() && applyMicrohabitatTemplate(target, currentConfig)) {
+            return true;
+        }
+
         if (random.nextInt(100) < currentConfig.groundPaletteChancePercent() && mutateGround(target, currentConfig)) {
             return true;
         }
@@ -293,6 +297,61 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
         return false;
     }
 
+    private boolean applyMicrohabitatTemplate(EcologyTarget target, EcologyEvolutionConfig currentConfig) {
+        EcologyMicrohabitatTemplate.Choice choice = EcologyMicrohabitatTemplate.choose(
+                target.biome(),
+                target.path(),
+                target.stage(),
+                target.habitats(),
+                random
+        );
+        Optional<EcologyTarget> shifted = templateTarget(target, choice, currentConfig);
+        if (shifted.isEmpty()) {
+            diagnostics.recordRejectSampled(currentConfig, "template-target", targetContext(target)
+                    + " template=" + choice.templateKey()
+                    + " offset=" + choice.dx() + "," + choice.dz());
+            return false;
+        }
+        EcologyTarget templateTarget = shifted.get();
+        diagnostics.recordTrace(currentConfig, "template.choose key=" + choice.templateKey()
+                + " material=" + choice.material()
+                + " ground-mutation=" + choice.groundMutation()
+                + " offset=" + choice.dx() + "," + choice.dz()
+                + " path=" + target.path()
+                + " stage=" + target.stage()
+                + " habitats=" + target.habitats()
+                + " ## microhabitat templates turn palette rolls into recognizable flora patches");
+        plugin.pathDebug().traceSampled(plugin, "ecology", "template.choose",
+                "key=" + choice.templateKey()
+                        + " material=" + choice.material()
+                        + " ground=" + choice.groundMutation()
+                        + " offset=" + choice.dx() + "," + choice.dz()
+                        + " at " + format(templateTarget.target()));
+        if (choice.groundMutation() || MUTABLE_GROUND.contains(choice.material())) {
+            return mutateGround(templateTarget.withSuggestedGround(choice.material()), currentConfig);
+        }
+        return placeDetail(templateTarget, choice.material(), "plant", currentConfig);
+    }
+
+    private Optional<EcologyTarget> templateTarget(EcologyTarget origin, EcologyMicrohabitatTemplate.Choice choice, EcologyEvolutionConfig currentConfig) {
+        int x = origin.ground().getX() + choice.dx();
+        int z = origin.ground().getZ() + choice.dz();
+        World world = origin.ground().getWorld();
+        int chunkX = x >> 4;
+        int chunkZ = z >> 4;
+        if (!world.isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+            return Optional.empty();
+        }
+        Optional<Block> ground = findSurfaceGround(world, x, z);
+        if (ground.isEmpty()) {
+            return Optional.empty();
+        }
+        Block surface = ground.get();
+        if (!isNearPlayer(surface.getLocation(), currentConfig.requiredPlayerDistanceChunks())) {
+            return Optional.empty();
+        }
+        return Optional.of(buildTarget(surface, BiomeEcologyPath.from(surface.getBiome())));
+    }
     private boolean mutateGround(EcologyTarget target, EcologyEvolutionConfig currentConfig) {
         Block ground = target.ground();
         Material current = ground.getType();

@@ -37,6 +37,7 @@ final class TreeEvolutionConfig {
     private final int testingMediumToMatureAge;
     private final int testingMatureToAncientAge;
     private final boolean testingAllowAnyRarityAncient;
+    private final TreeMaturityStage maximumStage;
     private final double testingStageBurstDelayMultiplier;
     private final double testingBreathingSkipChance;
     private final double damageSlowdownPerHit;
@@ -81,6 +82,7 @@ final class TreeEvolutionConfig {
             int testingMediumToMatureAge,
             int testingMatureToAncientAge,
             boolean testingAllowAnyRarityAncient,
+            TreeMaturityStage maximumStage,
             double testingStageBurstDelayMultiplier,
             double testingBreathingSkipChance,
             double damageSlowdownPerHit,
@@ -124,6 +126,7 @@ final class TreeEvolutionConfig {
         this.testingMediumToMatureAge = testingMediumToMatureAge;
         this.testingMatureToAncientAge = testingMatureToAncientAge;
         this.testingAllowAnyRarityAncient = testingAllowAnyRarityAncient;
+        this.maximumStage = maximumStage;
         this.testingStageBurstDelayMultiplier = testingStageBurstDelayMultiplier;
         this.testingBreathingSkipChance = testingBreathingSkipChance;
         this.damageSlowdownPerHit = damageSlowdownPerHit;
@@ -176,6 +179,7 @@ final class TreeEvolutionConfig {
                 Math.max(2, config.getInt("tree-evolution.testing.stage-acceleration.medium-to-mature-age", 12)),
                 Math.max(3, config.getInt("tree-evolution.testing.stage-acceleration.mature-to-ancient-age", 36)),
                 config.getBoolean("tree-evolution.testing.stage-acceleration.allow-any-rarity-ancient", true),
+                parseMaximumStage(config),
                 clamp(config.getDouble("tree-evolution.testing.stage-acceleration.stage-burst-delay-multiplier", 0.04D), 0.01D, 1.0D),
                 clamp(config.getDouble("tree-evolution.testing.stage-acceleration.breathing-skip-percent", 0.0D) / 100.0D, 0.0D, 0.90D),
                 Math.max(0.0D, config.getDouble("tree-evolution.dynamic-slowdown.damage-delay-per-hit", 0.12D)),
@@ -321,6 +325,14 @@ final class TreeEvolutionConfig {
         return testingStageAccelerationEnabled() && testingAllowAnyRarityAncient;
     }
 
+    TreeMaturityStage maximumStage() {
+        return maximumStage;
+    }
+
+    boolean ancientStageOnHold() {
+        return maximumStage.ordinal() < TreeMaturityStage.ANCIENT.ordinal();
+    }
+
     double stageBurstDelayMultiplier() {
         return testingStageAccelerationEnabled() ? testingStageBurstDelayMultiplier : 0.28D;
     }
@@ -375,8 +387,23 @@ final class TreeEvolutionConfig {
                 + ", replay-debug=" + debugReplayEnabled()
                 + ", stage-accel=" + testingStageAccelerationEnabled()
                 + ", stage-ages=" + smallToMediumAge() + "/" + mediumToMatureAge() + "/" + matureToAncientAge()
+                + ", maximum-stage=" + maximumStage
                 + ", auto-scan=" + autoScanOnStartup
                 + ", testing=" + testingEnabled;
+    }
+
+    private static TreeMaturityStage parseMaximumStage(FileConfiguration config) {
+        String configured = config.getString("tree-evolution.maximum-stage");
+        if (configured == null || configured.isBlank()) {
+            return config.getBoolean("tree-evolution.ancient-stage.on-hold", true)
+                    ? TreeMaturityStage.MEDIUM
+                    : TreeMaturityStage.ANCIENT;
+        }
+        try {
+            return TreeMaturityStage.valueOf(configured.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ignored) {
+            return TreeMaturityStage.MEDIUM;
+        }
     }
 
     private static double sanitizeGrowthSpeedMultiplier(double value) {
