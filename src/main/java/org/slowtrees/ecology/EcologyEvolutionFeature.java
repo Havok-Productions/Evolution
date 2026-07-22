@@ -376,6 +376,11 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
             return false;
         }
 
+        if (!plugin.canEvolveAt(ground.getLocation(), "ecology")) {
+            diagnostics.recordRejectSampled(currentConfig,
+                    "worldguard", targetContext(target));
+            return false;
+        }
         ground.setType(replacement, false);
         changedBlocks.incrementAndGet();
         diagnostics.recordAction(plugin, currentConfig, "ground", ground,
@@ -388,6 +393,11 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
     private boolean placeDetail(EcologyTarget target, Material material, String action, EcologyEvolutionConfig currentConfig) {
         Block block = target.target();
         Block ground = target.ground();
+        if (!plugin.canEvolveAt(block.getLocation(), "ecology")) {
+            diagnostics.recordRejectSampled(currentConfig,
+                    "worldguard", targetContext(target));
+            return false;
+        }
         if (currentConfig.maxDetailsPerArea() > 0 && countNearbyDetails(block, 6) >= currentConfig.maxDetailsPerArea()) {
             diagnostics.recordRejectSampled(currentConfig, "density", targetContext(target)
                     + " nearby-details=" + countNearbyDetails(block, 6)
@@ -583,6 +593,9 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
             return false;
         }
 
+        if (!plugin.canEvolveAt(target.getLocation(), "ecology")) {
+            return false;
+        }
         target.setType(candidate.logMaterial(), false);
         changedBlocks.incrementAndGet();
         placeLeafCluster(target, candidate.leafMaterial(), 1);
@@ -608,6 +621,9 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
             return false;
         }
 
+        if (!plugin.canEvolveAt(branch.getLocation(), "ecology")) {
+            return false;
+        }
         branch.setType(candidate.logMaterial(), false);
         changedBlocks.incrementAndGet();
         placeLeafCluster(branch, candidate.leafMaterial(), 2);
@@ -626,6 +642,9 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
                 continue;
             }
 
+            if (!plugin.canEvolveAt(target.getLocation(), "ecology")) {
+                continue;
+            }
             placeLeaf(target, candidate.leafMaterial());
             changedBlocks.incrementAndGet();
             diagnostics.recordAction(plugin, currentConfig, "canopy", target, "leaf=" + candidate.leafMaterial());
@@ -749,7 +768,9 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
 
     private boolean placeTallPlant(Block lower, Material material) {
         Block upper = lower.getRelative(BlockFace.UP);
-        if (!upper.getType().isAir()) {
+        if (!upper.getType().isAir()
+                || !plugin.canEvolveAt(lower.getLocation(), "ecology")
+                || !plugin.canEvolveAt(upper.getLocation(), "ecology")) {
             return false;
         }
         BlockData lowerData = Bukkit.createBlockData(material);
@@ -776,7 +797,8 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
     }
 
     private void placeLeafIfAir(Block block, Material leafMaterial) {
-        if (isAirLike(block.getType())) {
+        if (isAirLike(block.getType())
+                && plugin.canEvolveAt(block.getLocation(), "ecology")) {
             placeLeaf(block, leafMaterial);
             changedBlocks.incrementAndGet();
         }

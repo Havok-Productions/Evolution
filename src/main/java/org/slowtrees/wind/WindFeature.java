@@ -205,6 +205,7 @@ public final class WindFeature implements PluginFeature, Listener {
             double drift = Math.max(0.05D, currentPattern.strength() * (storm ? 0.18D : rain ? 0.06D : 0.12D));
             Location start = canopy.getLocation().add(0.5D, -0.2D, 0.5D);
             BlockData leafData = canopy.getBlockData();
+            int spawned = 0;
             for (int index = 0; index < count; index++) {
                 double step = (index + 1) * currentPattern.strength() * (storm ? 0.7D : rain ? 0.25D : 0.45D);
                 Location driftPoint = start.clone().add(
@@ -212,6 +213,9 @@ public final class WindFeature implements PluginFeature, Listener {
                         -0.15D * index,
                         currentPattern.z() * step
                 );
+                if (!plugin.canEvolveAt(driftPoint, "wind")) {
+                    continue;
+                }
                 player.spawnParticle(
                         Particle.BLOCK,
                         driftPoint,
@@ -222,9 +226,12 @@ public final class WindFeature implements PluginFeature, Listener {
                         drift,
                         leafData
                 );
+                spawned++;
             }
-            diagnostics.recordLeafParticles(count);
-            sample.workUnits(count).changedUnits(count).detail("particles=" + count + " canopy=" + format(canopy));
+            diagnostics.recordLeafParticles(spawned);
+            sample.workUnits(count).changedUnits(spawned)
+                    .detail("particles=" + spawned + "/" + count
+                            + " canopy=" + format(canopy));
         }
     }
 
@@ -281,6 +288,9 @@ public final class WindFeature implements PluginFeature, Listener {
                     diagnostics.recordChunkCapReject();
                     diagnostics.recordEvent(currentConfig, "litter-failed: chunk cap reached at " + format(block)
                             + " max=" + currentConfig.maxLeafLitterPerChunk());
+                    continue;
+                }
+                if (!plugin.canEvolveAt(block.getLocation(), "wind")) {
                     continue;
                 }
                 block.setType(Material.LEAF_LITTER, false);

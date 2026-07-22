@@ -330,7 +330,9 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
                 Block block = world.getBlockAt(next.x(), next.y(), next.z());
                 plan.removeNext();
-                if (block.getType() == plan.originalMaterial()) {
+                if (block.getType() == plan.originalMaterial()
+                        && plugin.canEvolveAt(block.getLocation(),
+                                "regrowth-decay")) {
                     block.setType(Material.AIR, false);
                     plugin.pathDebug().trace(plugin, "regrowth", "decay.remove-block", format(block.getLocation()));
                     removed++;
@@ -706,6 +708,10 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             return false;
         }
 
+        if (!plugin.canEvolveAt(location, "regrowth")) {
+            return false;
+        }
+
         int chunkX = location.getBlockX() >> 4;
         int chunkZ = location.getBlockZ() >> 4;
         int radius = currentConfig.ownedChunkRadius();
@@ -771,6 +777,7 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             return false;
         }
 
+
         int chunkX = location.getBlockX() >> 4;
         int chunkZ = location.getBlockZ() >> 4;
         for (Player player : world.getPlayers()) {
@@ -794,7 +801,9 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         Block block = state.getBlock();
         Material currentType = block.getType();
         Material plannedType = state.getType();
-        return currentType == plannedType || currentConfig.isReplaceable(currentType);
+        return plugin.canEvolveAt(block.getLocation(), "regrowth")
+                && (currentType == plannedType
+                        || currentConfig.isReplaceable(currentType));
     }
 
     private Optional<PendingRegrowth> createPendingMushroom(Block block, PlantRegrowthConfig currentConfig) {

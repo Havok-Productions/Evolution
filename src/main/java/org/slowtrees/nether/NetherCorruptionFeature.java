@@ -304,7 +304,9 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
                 Block block = target.get();
                 Material original = block.getType();
                 NetherMimicResult mimic = terrainMimic.mimic(block, source, random, nearbyCorruptionMaterials(world, block));
-                if (mimic != null && mimic.material() != original) {
+                if (mimic != null && mimic.material() != original
+                        && plugin.canEvolveAt(block.getLocation(),
+                                "nether-corruption")) {
                     block.setType(mimic.material(), false);
                     frontierFor(source).add(block.getX(), block.getY(), block.getZ(), currentConfig.maxFrontierSize());
                     plugin.pathDebug().trace(plugin, "nether", "spread.replace", format(block)

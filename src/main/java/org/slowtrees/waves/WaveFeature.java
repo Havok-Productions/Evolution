@@ -479,8 +479,11 @@ public final class WaveFeature implements PluginFeature, Listener {
     private void putWaveVisuals(Map<WaveRenderer.WaveKey, Integer> visuals, World world,
             int x, int surfaceY, int z, WaveModel.WaveSample sample) {
         for (WaveHeightStack.VisualLayer layer : heightStack.layers(sample.height())) {
-            visuals.put(new WaveRenderer.WaveKey(world.getUID(), x,
-                    surfaceY + 1 + layer.yOffset(), z), layer.waterLevel());
+            int y = surfaceY + 1 + layer.yOffset();
+            if (plugin.canEvolveAt(new Location(world, x, y, z), "waves")) {
+                visuals.put(new WaveRenderer.WaveKey(
+                        world.getUID(), x, y, z), layer.waterLevel());
+            }
         }
     }
     private int addShorelineRunup(World world, WaveConfig currentConfig,
@@ -512,6 +515,9 @@ public final class WaveFeature implements PluginFeature, Listener {
                 break;
             }
             Block target = world.getBlockAt(x, groundY + 1, z);
+            if (!plugin.canEvolveAt(target.getLocation(), "waves")) {
+                continue;
+            }
             Material ground = world.getBlockAt(x, groundY, z).getType();
             if (!WaveMaterials.isRunupGround(ground)
                     || !WaveMaterials.isVisualReplaceable(target.getType())
@@ -567,7 +573,8 @@ public final class WaveFeature implements PluginFeature, Listener {
                 continue;
             }
             Location location = boat.getLocation();
-            if (!isOwnedLoaded(location.getWorld(), location.getBlockX(), location.getBlockZ())) {
+            if (!isOwnedLoaded(location.getWorld(), location.getBlockX(), location.getBlockZ())
+                    || !plugin.canEvolveAt(location, "waves")) {
                 continue;
             }
             TravelingWaveRegistry.FrontSample frontSample = travelingWaves.sample(

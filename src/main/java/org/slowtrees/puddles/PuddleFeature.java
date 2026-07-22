@@ -336,7 +336,9 @@ public final class PuddleFeature implements PluginFeature, Listener {
             return Optional.empty();
         }
         Block waterBlock = world.getBlockAt(x, waterY, z);
-        if (!waterBlock.getType().isAir() || waterBlock.getLightFromSky() <= 0) {
+        if (!plugin.canEvolveAt(waterBlock.getLocation(), "puddles")
+                || !waterBlock.getType().isAir()
+                || waterBlock.getLightFromSky() <= 0) {
             diagnostics.recordRejected();
             return Optional.empty();
         }
@@ -411,7 +413,10 @@ public final class PuddleFeature implements PluginFeature, Listener {
     private Set<Puddle> visiblePuddles(Player player, Set<Puddle> puddles, PuddleConfig currentConfig) {
         Set<Puddle> visible = new HashSet<>();
         for (Puddle puddle : puddles) {
-            if (player.getWorld().getUID().equals(puddle.worldId()) && isNearPlayer(player, puddle, currentConfig.radius() * 2)) {
+            if (player.getWorld().getUID().equals(puddle.worldId())
+                    && isNearPlayer(player, puddle, currentConfig.radius() * 2)
+                    && plugin.canEvolveAt(new Location(player.getWorld(),
+                            puddle.x(), puddle.y(), puddle.z()), "puddles")) {
                 visible.add(puddle);
             }
         }

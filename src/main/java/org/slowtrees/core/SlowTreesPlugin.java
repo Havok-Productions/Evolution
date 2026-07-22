@@ -6,6 +6,7 @@ import java.util.List;
 import org.slowtrees.api.SlowTreesApi;
 import org.slowtrees.api.SlowTreesProvider;
 import org.slowtrees.api.internal.SlowTreesApiImpl;
+import org.bukkit.Location;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.event.Listener;
@@ -32,6 +33,24 @@ public final class SlowTreesPlugin extends JavaPlugin {
     private PuddleFeature puddleFeature;
     private WaveFeature waveFeature;
     private SlowTreesApi api;
+    private EvolutionProtection evolutionProtection =
+            new NoopEvolutionProtection("WorldGuard not detected");
+
+    @Override
+    public void onLoad() {
+        if (getServer().getPluginManager().getPlugin("WorldGuard") == null) {
+            return;
+        }
+        try {
+            evolutionProtection = new WorldGuardEvolutionProtection(this);
+            evolutionProtection.onLoad();
+        } catch (LinkageError | RuntimeException failure) {
+            evolutionProtection = new NoopEvolutionProtection(
+                    "WorldGuard integration unavailable");
+            getLogger().warning("Could not register WorldGuard evolution flag: "
+                    + failure.getClass().getSimpleName());
+        }
+    }
 
     @Override
     public void onEnable() {
@@ -45,6 +64,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
         architecturePathDebug.trace(this, "core", "persistence.save-default-config", "config.yml");
         architecturePathDebug.trace(this, "core", "persistence.save-config", "config.yml defaults merged");
         architecturePathDebug.trace(this, "core", "plugin.enable.start", "default config saved and merged");
+        enableEvolutionProtection();
         regrowthFeature = new PlantRegrowthFeature(this);
         meadowFeature = new MeadowGrowthFeature(this);
         ecologyFeature = new EcologyEvolutionFeature(this);
@@ -182,13 +202,44 @@ public final class SlowTreesPlugin extends JavaPlugin {
         pathDebug().trace(this, "core", "persistence.reload-config", "config.yml");
         pathDebug().reload(this);
         resourceReporter().reload(this);
+        try {
+            evolutionProtection.reload();
+        } catch (LinkageError | RuntimeException failure) {
+            pathDebug().trace(this, "worldguard",
+                    "integration.reload-failed",
+                    failure.getClass().getSimpleName()
+                            + " ## Evolution remains active without region integration");
+            evolutionProtection = new NoopEvolutionProtection(
+                    "WorldGuard reload failed");
+        }
         features.forEach(PluginFeature::reload);
     }
 
     public List<String> featureStatuses() {
-        return features.stream()
+        List<String> statuses = new ArrayList<>(features.stream()
                 .map(PluginFeature::status)
-                .toList();
+                .toList());
+        statuses.add(evolutionProtection.status());
+        return List.copyOf(statuses);
+    }
+
+    public boolean canEvolveAt(Location location, String feature) {
+        return evolutionProtection.allows(location, feature);
+    }
+
+    private void enableEvolutionProtection() {
+        try {
+            evolutionProtection.onEnable();
+        } catch (LinkageError | RuntimeException failure) {
+            pathDebug().trace(this, "worldguard",
+                    "integration.enable-failed",
+                    failure.getClass().getSimpleName()
+                            + " ## Evolution remains active without region integration");
+            getLogger().warning("WorldGuard integration could not be enabled: "
+                    + failure.getClass().getSimpleName());
+            evolutionProtection = new NoopEvolutionProtection(
+                    "WorldGuard enable failed");
+        }
     }
 
     public PlantRegrowthFeature regrowthFeature() {

@@ -3,6 +3,7 @@ version: ${project.version}
 main: org.slowtrees.core.SlowTreesPlugin
 api-version: '26.1.2'
 folia-supported: true
+softdepend: [WorldGuard]
 description: Folia-safe natural world evolution, regrowth, wind, puddles, waves, ecology, and Nether corruption.
 commands:
   evolution:

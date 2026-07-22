@@ -51,6 +51,15 @@ owned-chunk-radius: 1
 enabled-worlds: []
 disabled-worlds: []
 
+# Optional WorldGuard support. Regions evolve normally unless explicitly denied:
+# /rg flag <region> evolution deny
+worldguard:
+  enabled: true
+  debug-denials: true
+  # Query failures allow evolution by default so a WorldGuard problem cannot
+  # stall every environmental task. Set false for strict protection.
+  fail-open: true
+
 # Writes a high-level trace of how the plugin moves through its own decision
 # paths. Use this when a feature is "doing something" but the why is unclear.
 architecture-pathfinding:

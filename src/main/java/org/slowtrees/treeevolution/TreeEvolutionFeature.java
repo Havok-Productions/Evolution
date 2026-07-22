@@ -1416,6 +1416,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         boolean nearbyCrownOwnsLeaf = protectedCanopyKeys.contains(coordinateKey)
                 && !plannedWoodBlocker;
         if (!isOwnedLoaded(leaf)
+                || !plugin.canEvolveAt(
+                        leaf.getLocation(), "tree-evolution")
                 || leaf.getType() != dna.species().leafMaterial()
                 || policy.preservesLeaf(leaf.getX(), leaf.getY(), leaf.getZ())
                 || nearbyCrownOwnsLeaf
@@ -1459,7 +1461,10 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             if (nearExistingSaplingOrLog(surface, 3)) {
                 continue;
             }
-            return Optional.of(surface);
+            if (plugin.canEvolveAt(surface.getLocation(),
+                    "tree-evolution")) {
+                return Optional.of(surface);
+            }
         }
         return Optional.empty();
     }
@@ -1810,6 +1815,10 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     private boolean canPlace(TreeCandidate candidate, TreeDna dna, Block target, PlannedTreeBlock plannedBlock, TreeEvolutionConfig currentConfig) {
         if (target.getY() < target.getWorld().getMinHeight() || target.getY() >= target.getWorld().getMaxHeight()) {
             diagnostics.recordReject(currentConfig, "height-limit", format(target));
+            return false;
+        }
+        if (!plugin.canEvolveAt(target.getLocation(), "tree-evolution")) {
+            diagnostics.recordReject(currentConfig, "worldguard", format(target));
             return false;
         }
         int chunkX = target.getX() >> 4;
@@ -2188,6 +2197,9 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         int chunkX = leaf.getX() >> 4;
         int chunkZ = leaf.getZ() >> 4;
         if (!leaf.getWorld().isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(leaf.getWorld(), chunkX, chunkZ, currentConfig.ownedChunkRadius())) {
+            return false;
+        }
+        if (!plugin.canEvolveAt(leaf.getLocation(), "tree-evolution")) {
             return false;
         }
         if (leaf.isLiquid() || (!currentConfig.isReplaceable(leaf.getType()) && leaf.getType() != dna.species().leafMaterial())) {
@@ -3001,6 +3013,9 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         World world = location.getWorld();
         if (world == null) {
             plugin.pathDebug().failure(plugin, "tree-evolution", "missing-world", "canWorkAt");
+            return false;
+        }
+        if (!plugin.canEvolveAt(location, "tree-evolution")) {
             return false;
         }
         int chunkX = location.getBlockX() >> 4;

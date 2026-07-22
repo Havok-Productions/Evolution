@@ -261,6 +261,9 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
             return false;
         }
 
+        if (!plugin.canEvolveAt(ground.getLocation(), "meadow")) {
+            return false;
+        }
         ground.setType(Material.GRASS_BLOCK, false);
         grassBlocksSpread.incrementAndGet();
         plugin.pathDebug().trace(plugin, "meadow", "growth.grass-spread", format(ground));
@@ -286,6 +289,9 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
             return placeTallPlant(target, plant);
         }
 
+        if (!plugin.canEvolveAt(target.getLocation(), "meadow")) {
+            return false;
+        }
         target.setType(plant, false);
         plantsGrown.incrementAndGet();
         if (isFlower(plant)) {
@@ -309,7 +315,9 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
 
     private boolean placeTallPlant(Block lower, Material material) {
         Block upper = lower.getRelative(0, 1, 0);
-        if (!upper.getType().isAir()) {
+        if (!upper.getType().isAir()
+                || !plugin.canEvolveAt(lower.getLocation(), "meadow")
+                || !plugin.canEvolveAt(upper.getLocation(), "meadow")) {
             return false;
         }
 
