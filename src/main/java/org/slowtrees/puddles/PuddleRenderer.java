@@ -21,13 +21,14 @@ final class PuddleRenderer {
     private final SlowTreesPlugin plugin;
     private final PuddleDiagnostics diagnostics;
     private final Map<UUID, Map<PuddleKey, Integer>> activeByPlayer = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> nextReassertMillis = new ConcurrentHashMap<>();
 
     PuddleRenderer(SlowTreesPlugin plugin, PuddleDiagnostics diagnostics) {
         this.plugin = plugin;
         this.diagnostics = diagnostics;
     }
 
-    void render(Player player, Set<Puddle> puddles) {
+    void render(Player player, Set<Puddle> puddles, long reassertIntervalMillis) {
         World world = player.getWorld();
         UUID playerId = player.getUniqueId();
         Map<PuddleKey, Integer> next = new HashMap<>();
@@ -37,6 +38,9 @@ final class PuddleRenderer {
             }
         }
 
+        long now = System.currentTimeMillis();
+        boolean reassert = !next.isEmpty()
+                && now >= nextReassertMillis.getOrDefault(playerId, 0L);
         Map<PuddleKey, Integer> previous = activeByPlayer.getOrDefault(playerId, Collections.emptyMap());
         Map<PuddleKey, Integer> toAdd = new HashMap<>();
         for (Map.Entry<PuddleKey, Integer> entry : next.entrySet()) {
@@ -45,11 +49,21 @@ final class PuddleRenderer {
                 toAdd.put(entry.getKey(), entry.getValue());
             }
         }
+        if (reassert) {
+            toAdd.putAll(next);
+            nextReassertMillis.put(playerId,
+                    now + Math.max(500L, reassertIntervalMillis));
+            plugin.pathDebug().traceSampled(plugin, "puddles",
+                    "render.reassert",
+                    "world=" + world.getName() + " blocks=" + next.size()
+                            + " ## visible packet puddles refreshed after client/chunk updates");
+        }
 
         Set<PuddleKey> toRemove = new HashSet<>(previous.keySet());
         toRemove.removeAll(next.keySet());
         if (next.isEmpty()) {
             activeByPlayer.remove(playerId);
+            nextReassertMillis.remove(playerId);
         } else {
             activeByPlayer.put(playerId, Collections.unmodifiableMap(next));
         }
@@ -57,11 +71,15 @@ final class PuddleRenderer {
         sendWater(player, toAdd);
         restore(player, toRemove);
         diagnostics.recordRendered(toAdd.size());
+        if (reassert) {
+            diagnostics.recordReasserted(toAdd.size());
+        }
         diagnostics.recordRestored(toRemove.size());
     }
 
     void clear(Player player, boolean restoreBlocks) {
         Map<PuddleKey, Integer> previous = activeByPlayer.remove(player.getUniqueId());
+        nextReassertMillis.remove(player.getUniqueId());
         if (previous == null || previous.isEmpty() || !restoreBlocks) {
             return;
         }
@@ -73,6 +91,7 @@ final class PuddleRenderer {
             clear(player, restoreBlocks);
         }
         activeByPlayer.clear();
+        nextReassertMillis.clear();
     }
 
     private void sendWater(Player player, Map<PuddleKey, Integer> locations) {

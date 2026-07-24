@@ -24,6 +24,8 @@ final class EcologyEvolutionConfig {
     private final int plantPaletteChancePercent;
     private final int rareFeatureChancePercent;
     private final int maxDetailsPerArea;
+    private final int bambooSpreadRadius;
+    private final int maxBambooBlocksPerArea;
     private final int maxTreeHeightBonus;
     private final int maxBranchesNearTree;
     private final int debugMapRadius;
@@ -49,6 +51,8 @@ final class EcologyEvolutionConfig {
             int plantPaletteChancePercent,
             int rareFeatureChancePercent,
             int maxDetailsPerArea,
+            int bambooSpreadRadius,
+            int maxBambooBlocksPerArea,
             int maxTreeHeightBonus,
             int maxBranchesNearTree,
             int debugMapRadius,
@@ -73,6 +77,8 @@ final class EcologyEvolutionConfig {
         this.plantPaletteChancePercent = plantPaletteChancePercent;
         this.rareFeatureChancePercent = rareFeatureChancePercent;
         this.maxDetailsPerArea = maxDetailsPerArea;
+        this.bambooSpreadRadius = bambooSpreadRadius;
+        this.maxBambooBlocksPerArea = maxBambooBlocksPerArea;
         this.maxTreeHeightBonus = maxTreeHeightBonus;
         this.maxBranchesNearTree = maxBranchesNearTree;
         this.debugMapRadius = debugMapRadius;
@@ -106,6 +112,8 @@ final class EcologyEvolutionConfig {
                 percent(config.getInt("ecology-evolution.plant-palette-chance-percent", 70)),
                 percent(config.getInt("ecology-evolution.rare-feature-chance-percent", 5)),
                 Math.max(0, config.getInt("ecology-evolution.max-details-per-area", 36)),
+                Math.max(1, Math.min(8, config.getInt("ecology-evolution.bamboo.spread-radius", 5))),
+                Math.max(1, config.getInt("ecology-evolution.bamboo.max-blocks-per-area", 32)),
                 Math.max(0, config.getInt("ecology-evolution.max-tree-height-bonus", 6)),
                 Math.max(0, config.getInt("ecology-evolution.max-branches-near-tree", 6)),
                 Math.max(3, config.getInt("ecology-evolution.debug.map-radius", 8)),
@@ -177,6 +185,14 @@ final class EcologyEvolutionConfig {
         return maxDetailsPerArea;
     }
 
+    int bambooSpreadRadius() {
+        return bambooSpreadRadius;
+    }
+
+    int maxBambooBlocksPerArea() {
+        return maxBambooBlocksPerArea;
+    }
+
     int maxTreeHeightBonus() {
         return maxTreeHeightBonus;
     }
@@ -214,6 +230,8 @@ final class EcologyEvolutionConfig {
                 + ", ground=" + groundPaletteChancePercent
                 + ", plant=" + plantPaletteChancePercent
                 + ", rare=" + rareFeatureChancePercent
+                + ", bamboo-radius=" + bambooSpreadRadius
+                + ", bamboo-cap=" + maxBambooBlocksPerArea
                 + ", max-height-bonus=" + maxTreeHeightBonus;
     }
 

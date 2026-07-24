@@ -101,6 +101,20 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         return terrainMimic.isCorruptionMaterial(material);
     }
 
+    public boolean registerPortalSource(Block portalBlock) {
+        NetherCorruptionConfig currentConfig = config;
+        World world = portalBlock.getWorld();
+        if (!currentConfig.enabled()
+                || world.getEnvironment() != World.Environment.NORMAL
+                || portalBlock.getType() != Material.NETHER_PORTAL) {
+            return false;
+        }
+
+        List<Block> portalBlocks = findConnectedPortalBlocks(portalBlock);
+        return !portalBlocks.isEmpty()
+                && queueSource(
+                        PortalSource.fromBlocks(portalBlocks), currentConfig);
+    }
     public boolean registerPortalSourceNear(Location location, int radius) {
         NetherCorruptionConfig currentConfig = config;
         World world = location.getWorld();
@@ -118,8 +132,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             return false;
         }
 
-        queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
-        return true;
+        return queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -158,10 +171,10 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             if (portal.isPresent()) {
                 List<Block> portalBlocks = findConnectedPortalBlocks(portal.get());
                 plugin.pathDebug().trace(plugin, "nether", "portal-scan.portal-found", "blocks=" + portalBlocks.size() + " at " + format(portal.get()));
-                if (!portalBlocks.isEmpty()) {
-                    queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
-                }
-                sample.changedUnits(portalBlocks.isEmpty() ? 0L : 1L).workUnits(portalBlocks.size()).detail("portal-found blocks=" + portalBlocks.size());
+                boolean queued = !portalBlocks.isEmpty()
+                        && queueSource(PortalSource.fromBlocks(portalBlocks), currentConfig);
+                sample.changedUnits(queued ? 1L : 0L).workUnits(portalBlocks.size())
+                        .detail("portal-found blocks=" + portalBlocks.size() + " queued=" + queued);
             } else {
                 negativePortalScanCache.put(negativeKey, now + currentConfig.portalNegativeCacheMillis());
                 sample.detail("portal-none radius=" + currentConfig.playerPortalScanRadius());
@@ -219,7 +232,15 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         }
     }
 
-    private void queueSource(PortalSource source, NetherCorruptionConfig currentConfig) {
+    private boolean queueSource(PortalSource source, NetherCorruptionConfig currentConfig) {
+        World world = source.world();
+        if (world == null || !isPortalSourceAllowed(source, world)) {
+            plugin.pathDebug().traceSampled(plugin, "nether", "source.queue.worldguard-deny",
+                    source.shortDescription()
+                            + " ## A protected Nether portal cannot seed corruption outside its region");
+            return false;
+        }
+
         PortalSource previous = sources.putIfAbsent(source.key(), source);
         if (previous == null) {
             frontierFor(source);
@@ -230,6 +251,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         } else {
             plugin.pathDebug().trace(plugin, "nether", "source.queue.existing", source.shortDescription());
         }
+        return true;
     }
 
     private void scheduleSpread(PortalSource source, long delayTicks) {
@@ -286,6 +308,14 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
                 plugin.pathDebug().trace(plugin, "nether", "spread.wait", source.shortDescription());
                 scheduleSpread(source, currentConfig.spreadStepTicks());
                 sample.detail("wait " + source.shortDescription());
+                return;
+            }
+            if (state == SourceState.PROTECTED) {
+                plugin.pathDebug().traceSampled(plugin, "nether", "spread.wait.worldguard-source",
+                        source.shortDescription()
+                                + " ## evolution=deny pauses this portal source and all outward spread");
+                scheduleSpread(source, currentConfig.spreadStepTicks());
+                sample.detail("worldguard-protected-source " + source.shortDescription());
                 return;
             }
 
@@ -347,17 +377,46 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
             return SourceState.WAIT;
         }
 
+        boolean portalPresent = false;
         for (int x = source.minX(); x <= source.maxX(); x++) {
             for (int y = source.minY(); y <= source.maxY(); y++) {
                 for (int z = source.minZ(); z <= source.maxZ(); z++) {
-                    if (world.getBlockAt(x, y, z).getType() == Material.NETHER_PORTAL) {
-                        return SourceState.ACTIVE;
+                    Block block = world.getBlockAt(x, y, z);
+                    if (block.getType() != Material.NETHER_PORTAL) {
+                        continue;
+                    }
+                    portalPresent = true;
+                    if (!plugin.canEvolveAt(block.getLocation(), "nether-portal-source")) {
+                        plugin.pathDebug().failure(plugin, "nether", "worldguard-portal-source",
+                                format(block) + " ## evolution=deny includes the Nether portal source");
+                        return SourceState.PROTECTED;
                     }
                 }
             }
         }
 
-        return SourceState.GONE;
+        return portalPresent ? SourceState.ACTIVE : SourceState.GONE;
+    }
+
+    private boolean isPortalSourceAllowed(PortalSource source, World world) {
+        boolean portalPresent = false;
+        for (int x = source.minX(); x <= source.maxX(); x++) {
+            for (int y = source.minY(); y <= source.maxY(); y++) {
+                for (int z = source.minZ(); z <= source.maxZ(); z++) {
+                    Block block = world.getBlockAt(x, y, z);
+                    if (block.getType() != Material.NETHER_PORTAL) {
+                        continue;
+                    }
+                    portalPresent = true;
+                    if (!plugin.canEvolveAt(block.getLocation(), "nether-portal-source")) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return portalPresent
+                || plugin.canEvolveAt(source.center(world), "nether-portal-source");
     }
 
     private Optional<Block> nextTarget(PortalSource source, World world, NetherCorruptionConfig currentConfig) {
@@ -517,7 +576,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
         Set<String> visited = new HashSet<>();
         queue.add(start);
 
-        while (!queue.isEmpty() && found.size() < 256) {
+        while (!queue.isEmpty() && found.size() < 512) {
             Block block = queue.poll();
             String key = blockKey(block);
             if (!visited.add(key) || block.getType() != Material.NETHER_PORTAL) {
@@ -707,6 +766,7 @@ public final class NetherCorruptionFeature implements PluginFeature, Listener {
     private enum SourceState {
         ACTIVE,
         WAIT,
+        PROTECTED,
         GONE
     }
 }

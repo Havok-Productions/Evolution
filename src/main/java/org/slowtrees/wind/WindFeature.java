@@ -12,6 +12,7 @@ import org.bukkit.Particle;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
+import org.bukkit.block.data.type.LeafLitter;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -282,7 +283,9 @@ public final class WindFeature implements PluginFeature, Listener {
                     diagnostics.recordEvent(currentConfig, "litter-failed: target too far from player at " + format(block));
                     continue;
                 }
-                if (isLeafLitterChunkCapped(block, currentConfig)) {
+                boolean stackingPile = isStackableLeafLitter(block);
+                if (!stackingPile
+                        && isLeafLitterChunkCapped(block, currentConfig)) {
                     plugin.pathDebug().failure(plugin, "wind", "chunk-cap", format(block));
                     plugin.pathDebug().trace(plugin, "wind", "litter.reject.chunk-cap", format(block));
                     diagnostics.recordChunkCapReject();
@@ -293,12 +296,32 @@ public final class WindFeature implements PluginFeature, Listener {
                 if (!plugin.canEvolveAt(block.getLocation(), "wind")) {
                     continue;
                 }
-                block.setType(Material.LEAF_LITTER, false);
-                plugin.pathDebug().trace(plugin, "wind", "litter.place", format(block) + " below=" + block.getRelative(0, -1, 0).getType());
-                diagnostics.recordLitterPlaced();
-                diagnostics.recordEvent(currentConfig, "litter-placed: target=" + format(block)
-                        + " below=" + block.getRelative(0, -1, 0).getType());
-                sample.workUnits(attempts).changedUnits(1).detail("placed " + format(block));
+                if (stackingPile) {
+                    LeafLitter litter = (LeafLitter) block.getBlockData();
+                    int before = litter.getSegmentAmount();
+                    litter.setSegmentAmount(
+                            LeafLitterStackPolicy.nextSegmentAmount(
+                                    before, litter.getMaximumSegmentAmount()));
+                    block.setBlockData(litter, false);
+                    plugin.pathDebug().trace(plugin, "wind", "litter.stack",
+                            format(block) + " segments=" + before + "->"
+                                    + litter.getSegmentAmount()
+                                    + " ## an existing pile matured instead of creating another sparse tile");
+                    diagnostics.recordLitterStacked();
+                    diagnostics.recordEvent(currentConfig,
+                            "litter-stacked: target=" + format(block)
+                                    + " segments=" + before + "->"
+                                    + litter.getSegmentAmount());
+                    sample.workUnits(attempts).changedUnits(1)
+                            .detail("stacked " + format(block));
+                } else {
+                    block.setType(Material.LEAF_LITTER, false);
+                    plugin.pathDebug().trace(plugin, "wind", "litter.place", format(block) + " below=" + block.getRelative(0, -1, 0).getType());
+                    diagnostics.recordLitterPlaced();
+                    diagnostics.recordEvent(currentConfig, "litter-placed: target=" + format(block)
+                            + " below=" + block.getRelative(0, -1, 0).getType());
+                    sample.workUnits(attempts).changedUnits(1).detail("placed " + format(block));
+                }
                 diagnostics.saveSoon(plugin, currentConfig);
                 return;
             }
@@ -338,8 +361,13 @@ public final class WindFeature implements PluginFeature, Listener {
                 Block block = world.getBlockAt(x, y, z);
                 String failure = leafLitterRules.placementFailure(block);
                 if (failure == null) {
-                    sample.workUnits(scanned).changedUnits(1).detail("found " + format(block));
-                    return Optional.of(block);
+                    Block target = findStackableLitterNear(
+                            block, currentConfig.leafLitterStackSearchRadius())
+                            .orElse(block);
+                    sample.workUnits(scanned).changedUnits(1).detail(
+                            (target == block ? "found " : "stack-near ")
+                                    + format(target));
+                    return Optional.of(target);
                 }
                 if (recordFailure && firstPotentialSurface == null && leafLitterRules.isPotentialSurfaceSpace(block)) {
                     firstPotentialSurface = block;
@@ -359,6 +387,56 @@ public final class WindFeature implements PluginFeature, Listener {
             sample.workUnits(scanned).detail(firstPotentialFailure == null ? "no-surface" : firstPotentialFailure);
             return Optional.empty();
         }
+    }
+
+    private Optional<Block> findStackableLitterNear(Block origin, int radius) {
+        if (radius <= 0) {
+            return Optional.empty();
+        }
+        try (ReportSample sample = plugin.resourceReporter().begin(
+                "wind", "search.litter-stack-target")) {
+            World world = origin.getWorld();
+            int inspected = 0;
+            for (int distance = 0; distance <= radius; distance++) {
+                for (int dx = -distance; dx <= distance; dx++) {
+                    for (int dz = -distance; dz <= distance; dz++) {
+                        if (Math.max(Math.abs(dx), Math.abs(dz)) != distance) {
+                            continue;
+                        }
+                        for (int dy : new int[]{0, 1, -1, 2, -2}) {
+                            inspected++;
+                            Block candidate = world.getBlockAt(
+                                    origin.getX() + dx,
+                                    origin.getY() + dy,
+                                    origin.getZ() + dz);
+                            int chunkX = candidate.getX() >> 4;
+                            int chunkZ = candidate.getZ() >> 4;
+                            if (!world.isChunkLoaded(chunkX, chunkZ)
+                                    || !Bukkit.isOwnedByCurrentRegion(
+                                            world, chunkX, chunkZ, 0)
+                                    || !isStackableLeafLitter(candidate)
+                                    || leafLitterRules.placementFailure(
+                                            candidate) != null) {
+                                continue;
+                            }
+                            sample.workUnits(inspected).changedUnits(1)
+                                    .detail("found " + format(candidate));
+                            return Optional.of(candidate);
+                        }
+                    }
+                }
+            }
+            sample.workUnits(inspected).detail("none");
+            return Optional.empty();
+        }
+    }
+
+    private boolean isStackableLeafLitter(Block block) {
+        if (block.getType() != Material.LEAF_LITTER
+                || !(block.getBlockData() instanceof LeafLitter litter)) {
+            return false;
+        }
+        return litter.getSegmentAmount() < litter.getMaximumSegmentAmount();
     }
 
     private boolean isLeafLitterChunkCapped(Block block, WindConfig currentConfig) {

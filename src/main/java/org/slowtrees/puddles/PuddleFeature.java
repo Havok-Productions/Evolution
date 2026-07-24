@@ -142,7 +142,8 @@ public final class PuddleFeature implements PluginFeature, Listener {
             }
 
             if (!currentConfig.enabled()) {
-                renderer.render(player, Set.of());
+                renderer.render(player, Set.of(),
+                        currentConfig.renderReassertMillis());
                 schedulePlayerPuddles(player, currentConfig.stepTicks());
                 sample.detail("disabled");
                 return;
@@ -150,7 +151,8 @@ public final class PuddleFeature implements PluginFeature, Listener {
 
             World world = player.getWorld();
             if (world.getEnvironment() != World.Environment.NORMAL || !currentConfig.isWorldAllowed(world)) {
-                renderer.render(player, Set.of());
+                renderer.render(player, Set.of(),
+                        currentConfig.renderReassertMillis());
                 schedulePlayerPuddles(player, currentConfig.stepTicks());
                 plugin.pathDebug().traceSampled(plugin, "puddles", "tick.skip.environment", world.getName() + " " + world.getEnvironment());
                 sample.detail("environment-skip");
@@ -165,6 +167,7 @@ public final class PuddleFeature implements PluginFeature, Listener {
             }
             Set<Puddle> puddles = puddlesByWorld.computeIfAbsent(worldId, ignored -> ConcurrentHashMap.newKeySet());
             int before = puddles.size();
+            retireDistantPuddles(world, puddles, currentConfig);
 
             if (world.hasStorm()) {
                 dryStartedMillisByWorld.remove(worldId);
@@ -179,7 +182,8 @@ public final class PuddleFeature implements PluginFeature, Listener {
             }
 
             Set<Puddle> visible = visiblePuddles(player, puddles, currentConfig);
-            renderer.render(player, visible);
+            renderer.render(player, visible,
+                    currentConfig.renderReassertMillis());
             int delta = puddles.size() - before;
             sample.workUnits(currentConfig.seedAttemptsPerCycle() + currentConfig.maxExpansionsPerCycle())
                     .changedUnits(Math.abs(delta))
@@ -408,6 +412,48 @@ public final class PuddleFeature implements PluginFeature, Listener {
         diagnostics.recordRejected();
         plugin.pathDebug().failure(plugin, "puddles", "player-distance", x + "," + z);
         return false;
+    }
+
+    private void retireDistantPuddles(
+            World world,
+            Set<Puddle> puddles,
+            PuddleConfig currentConfig
+    ) {
+        if (puddles.isEmpty()) {
+            return;
+        }
+        int retentionRadius = currentConfig.retentionRadius();
+        long retentionSquared = (long) retentionRadius * retentionRadius;
+        List<Puddle> retired = new ArrayList<>();
+        for (Puddle puddle : puddles) {
+            boolean nearPlayer = false;
+            for (Player online : world.getPlayers()) {
+                int dx = puddle.x() - online.getLocation().getBlockX();
+                int dz = puddle.z() - online.getLocation().getBlockZ();
+                if ((long) dx * dx + (long) dz * dz
+                        <= retentionSquared) {
+                    nearPlayer = true;
+                    break;
+                }
+            }
+            if (!nearPlayer) {
+                retired.add(puddle);
+            }
+        }
+        if (retired.isEmpty()) {
+            return;
+        }
+        puddles.removeAll(retired);
+        diagnostics.recordRetired(retired.size());
+        diagnostics.recordEvent(currentConfig,
+                "[STATE][puddles] retired-distant=" + retired.size()
+                        + " remaining=" + puddles.size()
+                        + " retention-radius=" + retentionRadius);
+        plugin.pathDebug().traceSampled(plugin, "puddles",
+                "state.retire-distant",
+                "removed=" + retired.size() + " remaining=" + puddles.size()
+                        + " radius=" + retentionRadius
+                        + " ## old travel paths release the bounded world pool");
     }
 
     private Set<Puddle> visiblePuddles(Player player, Set<Puddle> puddles, PuddleConfig currentConfig) {

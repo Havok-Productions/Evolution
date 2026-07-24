@@ -9,9 +9,15 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.Random;
 import java.util.UUID;
 import javax.imageio.ImageIO;
@@ -35,6 +41,7 @@ public final class TreeShapeSmokeTest {
             for (TreeMaturityStage stage : TreeMaturityStage.values()) {
                 TreeDna dna = sampleDna(species, stage);
                 TreePlan plan = treeBodyPlan(dna);
+                assertTrunkFaceConnected(plan, dna);
                 TreeShapeEngine.ShapeReport report = SHAPE_ENGINE.analyze(plan, dna);
                 String name = species.id() + "-" + stage.name().toLowerCase();
                 Path png = OUT.resolve(name + ".png");
@@ -75,6 +82,7 @@ public final class TreeShapeSmokeTest {
             for (TreeMaturityStage stage : List.of(TreeMaturityStage.MEDIUM, TreeMaturityStage.MATURE, TreeMaturityStage.ANCIENT)) {
                 TreeDna dna = sampleDna(context.species(), stage, context);
                 TreePlan plan = treeBodyPlan(dna);
+                assertTrunkFaceConnected(plan, dna);
                 TreeShapeEngine.ShapeReport report = SHAPE_ENGINE.analyze(plan, dna);
                 String name = context.id() + "-" + stage.name().toLowerCase();
                 Path png = biomeOut.resolve(name + ".png");
@@ -105,6 +113,47 @@ public final class TreeShapeSmokeTest {
 
     private static TreePlan treeBodyPlan(TreeDna dna) {
         return TREE_PLANNER.plan(dna, null, false);
+    }
+
+    private static void assertTrunkFaceConnected(TreePlan plan, TreeDna dna) {
+        Map<String, PlannedTreeBlock> trunks = new HashMap<>();
+        Deque<PlannedTreeBlock> open = new ArrayDeque<>();
+        Set<String> visited = new HashSet<>();
+        for (PlannedTreeBlock block : plan.orderedBlocks()) {
+            if (block.role() != TreeBlockRole.TRUNK) {
+                continue;
+            }
+            trunks.put(block.key(), block);
+            if (block.y() == dna.baseY()) {
+                open.add(block);
+                visited.add(block.key());
+            }
+        }
+
+        int[][] neighbors = {
+                {1, 0, 0}, {-1, 0, 0},
+                {0, 1, 0}, {0, -1, 0},
+                {0, 0, 1}, {0, 0, -1}
+        };
+        while (!open.isEmpty()) {
+            PlannedTreeBlock current = open.removeFirst();
+            for (int[] offset : neighbors) {
+                String key = (current.x() + offset[0]) + ":"
+                        + (current.y() + offset[1]) + ":"
+                        + (current.z() + offset[2]);
+                PlannedTreeBlock next = trunks.get(key);
+                if (next != null && visited.add(key)) {
+                    open.addLast(next);
+                }
+            }
+        }
+
+        if (visited.size() != trunks.size()) {
+            throw new IllegalStateException(
+                    dna.species().id() + " " + dna.maturityStage()
+                            + " has " + (trunks.size() - visited.size())
+                            + " trunk cells disconnected from its base");
+        }
     }
 
     private static TreeDna sampleDna(TreeSpecies species, TreeMaturityStage stage) {

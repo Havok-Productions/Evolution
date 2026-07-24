@@ -27,7 +27,8 @@ final class LeafLitterRules {
             Material.VOID_AIR,
             Material.SHORT_GRASS,
             Material.FERN,
-            Material.SNOW
+            Material.SNOW,
+            Material.LEAF_LITTER
     );
 
     String placementFailure(Block targetBlock) {

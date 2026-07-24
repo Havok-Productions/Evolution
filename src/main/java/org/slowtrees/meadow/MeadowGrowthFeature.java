@@ -71,6 +71,7 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
     private final AtomicLong grassBlocksSpread = new AtomicLong();
     private final AtomicLong plantsGrown = new AtomicLong();
     private final AtomicLong flowersGrown = new AtomicLong();
+    private final AtomicLong leafLitterReplaced = new AtomicLong();
     private volatile MeadowGrowthConfig config;
 
     public MeadowGrowthFeature(SlowTreesPlugin plugin) {
@@ -101,7 +102,9 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
     public String status() {
         return "Meadow growth spread " + grassBlocksSpread.get()
                 + " grass block(s), grew " + plantsGrown.get()
-                + " plant(s), and grew " + flowersGrown.get() + " flower(s).";
+                + " plant(s), grew " + flowersGrown.get()
+                + " flower(s), and replaced " + leafLitterReplaced.get()
+                + " leaf-litter pile(s).";
     }
 
     public boolean enabled() {
@@ -162,6 +165,18 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
 
             int changed = 0;
             int attempts = 0;
+            for (int attempt = 0;
+                    attempt < currentConfig.grassPriorityAttemptsPerStep()
+                            && changed < currentConfig.blocksPerStep();
+                    attempt++) {
+                attempts++;
+                Optional<Block> frontier = findGrassFrontierTarget(
+                        origin, currentConfig);
+                if (frontier.isPresent()
+                        && spreadGrass(frontier.get(), currentConfig)) {
+                    changed++;
+                }
+            }
             for (int attempt = 0; attempt < currentConfig.attemptsPerStep() && changed < currentConfig.blocksPerStep(); attempt++) {
                 attempts++;
                 Optional<Block> target = findTarget(origin, currentConfig);
@@ -225,6 +240,112 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
             sample.changedUnits(1).detail("found " + format(ground));
             return Optional.of(ground);
         }
+    }
+
+    private Optional<Block> findGrassFrontierTarget(
+            Location origin,
+            MeadowGrowthConfig currentConfig
+    ) {
+        try (ReportSample sample = plugin.resourceReporter().begin(
+                "meadow", "search.grass-frontier")) {
+            World world = origin.getWorld();
+            if (world == null) {
+                sample.detail("missing-world");
+                return Optional.empty();
+            }
+
+            int radius = currentConfig.searchRadius();
+            if (currentConfig.requiredPlayerDistanceChunks() > 0) {
+                radius = Math.min(radius,
+                        currentConfig.requiredPlayerDistanceChunks() * 16);
+            }
+            int dx = random.nextInt(radius * 2 + 1) - radius;
+            int dz = random.nextInt(radius * 2 + 1) - radius;
+            if ((dx * dx) + (dz * dz) > radius * radius) {
+                sample.detail("radius-roll");
+                return Optional.empty();
+            }
+
+            Optional<Block> sampled = surfaceCandidateAt(
+                    world,
+                    origin.getBlockX() + dx,
+                    origin.getBlockZ() + dz);
+            if (sampled.isEmpty()) {
+                sample.detail("sample-unavailable");
+                return Optional.empty();
+            }
+            Block source = groundBelowPlant(sampled.get());
+            if (SPREADABLE_GROUND.contains(source.getType())) {
+                sample.changedUnits(1).detail("direct " + format(source));
+                return Optional.of(source);
+            }
+            if (!MEADOW_GROUND.contains(source.getType())) {
+                sample.detail("missing-meadow-source");
+                return Optional.empty();
+            }
+
+            int frontierRadius = currentConfig.grassFrontierRadius();
+            int frontierAttempts = Math.min(16,
+                    Math.max(8, frontierRadius * 4));
+            for (int attempt = 0; attempt < frontierAttempts; attempt++) {
+                int offsetX = random.nextInt(frontierRadius * 2 + 1)
+                        - frontierRadius;
+                int offsetZ = random.nextInt(frontierRadius * 2 + 1)
+                        - frontierRadius;
+                if ((offsetX == 0 && offsetZ == 0)
+                        || (offsetX * offsetX) + (offsetZ * offsetZ)
+                                > frontierRadius * frontierRadius) {
+                    continue;
+                }
+                Optional<Block> nearby = surfaceCandidateAt(
+                        world,
+                        source.getX() + offsetX,
+                        source.getZ() + offsetZ);
+                if (nearby.isEmpty()) {
+                    continue;
+                }
+                Block candidate = groundBelowPlant(nearby.get());
+                if (SPREADABLE_GROUND.contains(candidate.getType())) {
+                    sample.workUnits(attempt + 1L).changedUnits(1)
+                            .detail("frontier " + format(candidate));
+                    plugin.pathDebug().traceSampled(plugin, "meadow",
+                            "search.grass-frontier-found",
+                            "source=" + format(source)
+                                    + " target=" + format(candidate)
+                                    + " ## bounded edge search prioritizes real dirt-to-grass expansion");
+                    return Optional.of(candidate);
+                }
+            }
+            sample.workUnits(frontierAttempts).detail("frontier-not-found");
+            return Optional.empty();
+        }
+    }
+
+    private Optional<Block> surfaceCandidateAt(World world, int x, int z) {
+        int chunkX = x >> 4;
+        int chunkZ = z >> 4;
+        if (!world.isChunkLoaded(chunkX, chunkZ)
+                || !Bukkit.isOwnedByCurrentRegion(
+                        world, chunkX, chunkZ, 0)) {
+            return Optional.empty();
+        }
+        Block highest = world.getHighestBlockAt(x, z);
+        if (highest.getY() <= world.getMinHeight()) {
+            return Optional.empty();
+        }
+        Block surface = highest.getType().isAir()
+                ? highest.getRelative(BlockFace.DOWN)
+                : highest;
+        if (!isSurfaceCandidate(surface)) {
+            surface = surface.getRelative(BlockFace.DOWN);
+        }
+        return Optional.of(surface);
+    }
+
+    private Block groundBelowPlant(Block block) {
+        return MEADOW_PLANTS.contains(block.getType())
+                ? block.getRelative(BlockFace.DOWN)
+                : block;
     }
 
     private boolean growAt(Block block, MeadowGrowthConfig currentConfig) {
@@ -292,8 +413,10 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
         if (!plugin.canEvolveAt(target.getLocation(), "meadow")) {
             return false;
         }
+        Material replaced = target.getType();
         target.setType(plant, false);
         plantsGrown.incrementAndGet();
+        recordLeafLitterReplacement(target, replaced, plant);
         if (isFlower(plant)) {
             flowersGrown.incrementAndGet();
             plugin.pathDebug().trace(plugin, "meadow", "growth.flower", format(target) + " " + plant);
@@ -328,11 +451,29 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
             upperBisected.setHalf(Bisected.Half.TOP);
         }
 
+        Material replaced = lower.getType();
         lower.setBlockData(lowerData, false);
         upper.setBlockData(upperData, false);
         plantsGrown.incrementAndGet();
-        plugin.pathDebug().trace(plugin, "meadow", "growth.height", format(lower) + " " + material);
+        recordLeafLitterReplacement(lower, replaced, material);
+        plugin.pathDebug().trace(plugin, "meadow", "growth.height",
+                format(lower) + " " + material + " replaced=" + replaced);
         return true;
+    }
+
+    private void recordLeafLitterReplacement(
+            Block target,
+            Material replaced,
+            Material plant
+    ) {
+        if (replaced != Material.LEAF_LITTER) {
+            return;
+        }
+        leafLitterReplaced.incrementAndGet();
+        plugin.pathDebug().trace(plugin, "meadow",
+                "growth.leaf-litter-replaced",
+                format(target) + " LEAF_LITTER->" + plant
+                        + " ## living vegetation may reclaim settled leaf piles");
     }
 
     private Material choosePlant(Biome biome, Block target, MeadowGrowthConfig currentConfig) {

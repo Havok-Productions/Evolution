@@ -28,6 +28,8 @@ final class PuddleConfig {
     private final double thunderstormMultiplier;
     private final double shrinkChance;
     private final boolean restoreOnDisable;
+    private final long renderReassertMillis;
+    private final int retentionRadiusMultiplier;
     private final int requiredPlayerDistanceChunks;
     private final int debugRecentEvents;
     private final boolean testingEnabled;
@@ -55,6 +57,8 @@ final class PuddleConfig {
             double thunderstormMultiplier,
             double shrinkChance,
             boolean restoreOnDisable,
+            long renderReassertMillis,
+            int retentionRadiusMultiplier,
             int requiredPlayerDistanceChunks,
             int debugRecentEvents,
             boolean testingEnabled,
@@ -81,6 +85,8 @@ final class PuddleConfig {
         this.thunderstormMultiplier = thunderstormMultiplier;
         this.shrinkChance = shrinkChance;
         this.restoreOnDisable = restoreOnDisable;
+        this.renderReassertMillis = renderReassertMillis;
+        this.retentionRadiusMultiplier = retentionRadiusMultiplier;
         this.requiredPlayerDistanceChunks = requiredPlayerDistanceChunks;
         this.debugRecentEvents = debugRecentEvents;
         this.testingEnabled = testingEnabled;
@@ -112,6 +118,10 @@ final class PuddleConfig {
                 Math.max(1.0D, finite(config.getDouble("puddles.growth.thunderstorm-multiplier", 2.0D), 2.0D)),
                 chance(config.getDouble("puddles.drying.shrink-chance", 0.18D)),
                 config.getBoolean("puddles.render.restore-on-disable", true),
+                Math.max(10L, config.getLong(
+                        "puddles.render.reassert-interval-ticks", 40L)) * 50L,
+                Math.max(1, config.getInt(
+                        "puddles.retention-radius-multiplier", 3)),
                 Math.max(0, config.getInt("puddles.required-player-distance-chunks", 6)),
                 Math.max(0, config.getInt("puddles.debug.recent-events", 80)),
                 testing,
@@ -191,6 +201,14 @@ final class PuddleConfig {
         return restoreOnDisable;
     }
 
+    long renderReassertMillis() {
+        return renderReassertMillis;
+    }
+
+    int retentionRadius() {
+        return radius * retentionRadiusMultiplier;
+    }
+
     int requiredPlayerDistanceChunks() {
         return requiredPlayerDistanceChunks;
     }
@@ -216,6 +234,8 @@ final class PuddleConfig {
                 + ", expansions=" + maxExpansionsPerCycle()
                 + ", size=" + maxPuddleSize
                 + ", depth=" + maxDepth
+                + ", retention-radius=" + retentionRadius()
+                + ", reassert-ms=" + renderReassertMillis
                 + ", dry-delay-ms=" + dryDelayMillis
                 + ", debug-events=" + debugRecentEvents;
     }

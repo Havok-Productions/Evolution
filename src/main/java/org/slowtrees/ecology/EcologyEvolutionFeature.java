@@ -29,6 +29,16 @@ import org.slowtrees.core.SlowTreesPlugin;
 public final class EcologyEvolutionFeature implements PluginFeature, Listener {
     private static final List<BlockFace> HORIZONTAL_FACES = List.of(BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST);
     private static final List<BlockFace> ALL_FACES = List.of(BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST);
+    private static final List<BambooOffset> BAMBOO_SPREAD_OFFSETS = List.of(
+            new BambooOffset(1, 0),
+            new BambooOffset(-1, 0),
+            new BambooOffset(0, 1),
+            new BambooOffset(0, -1),
+            new BambooOffset(1, 1),
+            new BambooOffset(1, -1),
+            new BambooOffset(-1, 1),
+            new BambooOffset(-1, -1)
+    );
     private static final Set<Material> TREE_GROUND = Set.of(
             Material.GRASS_BLOCK,
             Material.DIRT,
@@ -391,6 +401,9 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
     }
 
     private boolean placeDetail(EcologyTarget target, Material material, String action, EcologyEvolutionConfig currentConfig) {
+        if (material == Material.BAMBOO) {
+            return placeBamboo(target, action, currentConfig);
+        }
         Block block = target.target();
         Block ground = target.ground();
         if (!plugin.canEvolveAt(block.getLocation(), "ecology")) {
@@ -429,6 +442,199 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
         plugin.pathDebug().trace(plugin, "ecology", "detail.palette",
                 adjusted + " path=" + target.path() + " stage=" + target.stage() + " at " + format(block));
         return true;
+    }
+
+    private boolean placeBamboo(EcologyTarget origin, String action,
+            EcologyEvolutionConfig currentConfig) {
+        if (origin.path() != BiomeEcologyPath.TROPICAL) {
+            diagnostics.recordRejectSampled(currentConfig, "bamboo-biome",
+                    targetContext(origin));
+            return false;
+        }
+
+        Optional<Block> parent = findNearestBamboo(
+                origin.target(), currentConfig.bambooSpreadRadius());
+        EcologyTarget placement = origin;
+        String mode = "seed";
+        if (parent.isPresent()) {
+            int nearby = countNearbyBamboo(parent.get(),
+                    currentConfig.bambooSpreadRadius(),
+                    currentConfig.maxBambooBlocksPerArea());
+            if (nearby >= currentConfig.maxBambooBlocksPerArea()) {
+                diagnostics.recordRejectSampled(currentConfig, "bamboo-density",
+                        "parent=" + format(parent.get())
+                                + " nearby=" + nearby
+                                + " cap=" + currentConfig.maxBambooBlocksPerArea());
+                return false;
+            }
+            Optional<EcologyTarget> spreadTarget = findBambooSpreadTarget(
+                    parent.get(), currentConfig);
+            if (spreadTarget.isEmpty()) {
+                diagnostics.recordRejectSampled(currentConfig,
+                        "bamboo-spread-target",
+                        "parent=" + format(parent.get())
+                                + " radius=" + currentConfig.bambooSpreadRadius());
+                return false;
+            }
+            placement = spreadTarget.get();
+            mode = "spread";
+        }
+
+        Block block = placement.target();
+        if (!plugin.canEvolveAt(block.getLocation(), "ecology")
+                || !canPlaceDetail(block, placement.ground(),
+                        Material.BAMBOO, placement)) {
+            diagnostics.recordRejectSampled(currentConfig, "bamboo-place",
+                    targetContext(placement)
+                            + " mode=" + mode
+                            + " replaceable-space=" + canReplaceDetailSpace(block));
+            return false;
+        }
+        int nearby = countNearbyBamboo(block,
+                currentConfig.bambooSpreadRadius(),
+                currentConfig.maxBambooBlocksPerArea());
+        if (nearby >= currentConfig.maxBambooBlocksPerArea()) {
+            diagnostics.recordRejectSampled(currentConfig, "bamboo-density",
+                    "target=" + format(block)
+                            + " nearby=" + nearby
+                            + " cap=" + currentConfig.maxBambooBlocksPerArea());
+            return false;
+        }
+
+        Material replaced = block.getType();
+        block.setType(Material.BAMBOO, false);
+        changedBlocks.incrementAndGet();
+        diagnostics.recordAction(plugin, currentConfig,
+                action.equals("rare") ? "rare" : "plant", block,
+                "material=BAMBOO mode=" + mode
+                        + " replaced=" + replaced
+                        + " path=" + placement.path()
+                        + parent.map(value -> " parent=" + format(value))
+                                .orElse(""));
+        plugin.pathDebug().trace(plugin, "ecology", "bamboo." + mode,
+                "target=" + format(block)
+                        + " replaced=" + replaced
+                        + parent.map(value -> " parent=" + format(value))
+                                .orElse("")
+                        + " ## jungle bamboo expands as a connected patch from stable world anchors");
+        return true;
+    }
+
+    private Optional<Block> findNearestBamboo(Block origin, int radius) {
+        Block nearest = null;
+        int nearestDistanceSquared = Integer.MAX_VALUE;
+        World world = origin.getWorld();
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                int distanceSquared = (dx * dx) + (dz * dz);
+                if (distanceSquared > radius * radius
+                        || distanceSquared >= nearestDistanceSquared) {
+                    continue;
+                }
+                int x = origin.getX() + dx;
+                int z = origin.getZ() + dz;
+                if (!isOwnedLoaded(world, x, z)) {
+                    continue;
+                }
+                Block bamboo = findBambooInColumn(world, x, z,
+                        origin.getY(), 6).orElse(null);
+                if (bamboo != null) {
+                    nearest = bamboo;
+                    nearestDistanceSquared = distanceSquared;
+                }
+            }
+        }
+        return Optional.ofNullable(nearest);
+    }
+
+    private Optional<Block> findBambooInColumn(World world, int x, int z,
+            int centerY, int verticalRadius) {
+        int minimumY = Math.max(world.getMinHeight(),
+                centerY - verticalRadius);
+        int maximumY = Math.min(world.getMaxHeight() - 1,
+                centerY + verticalRadius);
+        for (int y = minimumY; y <= maximumY; y++) {
+            Block bamboo = world.getBlockAt(x, y, z);
+            if (bamboo.getType() != Material.BAMBOO) {
+                continue;
+            }
+            int descent = 0;
+            while (bamboo.getY() > world.getMinHeight()
+                    && bamboo.getRelative(BlockFace.DOWN).getType()
+                            == Material.BAMBOO
+                    && descent++ < 16) {
+                bamboo = bamboo.getRelative(BlockFace.DOWN);
+            }
+            return Optional.of(bamboo);
+        }
+        return Optional.empty();
+    }
+
+    private Optional<EcologyTarget> findBambooSpreadTarget(Block parent,
+            EcologyEvolutionConfig currentConfig) {
+        int start = random.nextInt(BAMBOO_SPREAD_OFFSETS.size());
+        World world = parent.getWorld();
+        for (int index = 0; index < BAMBOO_SPREAD_OFFSETS.size(); index++) {
+            BambooOffset offset = BAMBOO_SPREAD_OFFSETS.get(
+                    (start + index) % BAMBOO_SPREAD_OFFSETS.size());
+            int x = parent.getX() + offset.dx();
+            int z = parent.getZ() + offset.dz();
+            if (!isOwnedLoaded(world, x, z)) {
+                continue;
+            }
+            Optional<Block> ground = findSurfaceGround(world, x, z);
+            if (ground.isEmpty()) {
+                continue;
+            }
+            EcologyTarget candidate = buildTarget(ground.get(),
+                    BiomeEcologyPath.from(ground.get().getBiome()));
+            if (candidate.path() != BiomeEcologyPath.TROPICAL
+                    || !isNearPlayer(candidate.target().getLocation(),
+                            currentConfig.requiredPlayerDistanceChunks())
+                    || !plugin.canEvolveAt(candidate.target().getLocation(),
+                            "ecology")
+                    || !canPlaceDetail(candidate.target(), candidate.ground(),
+                            Material.BAMBOO, candidate)) {
+                continue;
+            }
+            return Optional.of(candidate);
+        }
+        return Optional.empty();
+    }
+
+    private int countNearbyBamboo(Block center, int radius, int stopAt) {
+        int count = 0;
+        World world = center.getWorld();
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                if ((dx * dx) + (dz * dz) > radius * radius) {
+                    continue;
+                }
+                int x = center.getX() + dx;
+                int z = center.getZ() + dz;
+                if (!isOwnedLoaded(world, x, z)) {
+                    continue;
+                }
+                int minimumY = Math.max(world.getMinHeight(),
+                        center.getY() - 2);
+                int maximumY = Math.min(world.getMaxHeight() - 1,
+                        center.getY() + 12);
+                for (int y = minimumY; y <= maximumY; y++) {
+                    if (world.getBlockAt(x, y, z).getType()
+                            == Material.BAMBOO && ++count >= stopAt) {
+                        return count;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    private boolean isOwnedLoaded(World world, int x, int z) {
+        int chunkX = x >> 4;
+        int chunkZ = z >> 4;
+        return world.isChunkLoaded(chunkX, chunkZ)
+                && Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0);
     }
 
     private Material adjustDetailForTerrain(Material material, EcologyTarget target) {
@@ -1077,6 +1283,9 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
         World world = location.getWorld();
         String worldName = world == null ? "unknown" : world.getName();
         return worldName + " " + location.getBlockX() + "," + location.getBlockY() + "," + location.getBlockZ();
+    }
+
+    private record BambooOffset(int dx, int dz) {
     }
 
     private interface MaterialPredicate {

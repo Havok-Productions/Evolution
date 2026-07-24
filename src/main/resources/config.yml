@@ -53,6 +53,8 @@ disabled-worlds: []
 
 # Optional WorldGuard support. Regions evolve normally unless explicitly denied:
 # /rg flag <region> evolution deny
+# A deny also blocks Nether portals from becoming corruption sources, so a
+# protected portal cannot spread evolution into otherwise allowed terrain.
 worldguard:
   enabled: true
   debug-denials: true
@@ -123,11 +125,18 @@ meadow-growth:
   attempts-per-step: 32
   blocks-per-step: 2
   required-player-distance-chunks: 6
-  grass-spread-chance-percent: 75
+  # ## A small bounded frontier pass seeks exposed dirt around sampled grass
+  # before normal plant placement. This raises real grass conversion without
+  # increasing the full render-distance scan budget.
+  grass-priority-attempts-per-step: 12
+  grass-frontier-radius: 3
+  grass-spread-chance-percent: 90
   plant-grow-chance-percent: 50
   flower-chance-percent: 10
   height-growth-chance-percent: 35
   max-plants-per-area: 30
+  # ## Grass, ferns, and flowers may reclaim leaf-litter tiles. Replacements
+  # are counted and traced as growth.leaf-litter-replaced.
   replace-leaf-litter: true
   # Fast test mode lets grass, flowers, and forest edges visibly spread while
   # world-health-mode is still enabled globally.
@@ -157,6 +166,12 @@ ecology-evolution:
   plant-palette-chance-percent: 70
   rare-feature-chance-percent: 5
   max-details-per-area: 36
+  bamboo:
+    # ## Bamboo rolls near an existing jungle stalk grow the connected patch.
+    # The radius is clamped to 1-8 so scans remain bounded on Folia regions.
+    spread-radius: 5
+    # Counts bamboo blocks, including height, inside the spread area.
+    max-blocks-per-area: 32
   max-tree-height-bonus: 6
   max-branches-near-tree: 6
   # Fast test mode makes biome ecology visible now. Later we can slow this
@@ -227,6 +242,34 @@ tree-evolution:
   damage-stall-ticks: 600
   roots:
     enabled: false
+  # ## Mature trees can reproduce by planting their own matching sapling.
+  # MEDIUM is the current fancy-tree ceiling, so reproduction begins there.
+  reproduction:
+    enabled: true
+    minimum-stage: MEDIUM
+    minimum-age: 20
+    medium-chance-percent: 4.5
+    mature-chance-percent: 8.0
+    ancient-chance-percent: 12.0
+    landmark-multiplier: 1.8
+    minimum-radius: 4
+    maximum-radius: 12
+    spacing-radius: 4
+    # ## Every attempt now samples a real point in the planting ring. Values
+    # are clamped to 1-64 so reproduction cannot create an unbounded scan.
+    search-attempts: 32
+    reserved-search:
+      # ## One bounded reproduction search lane prevents active tree shaping
+      # from consuming every block-budget turn. It can place at most one
+      # sapling per pass and never bypasses Folia, terrain, light, or protection.
+      interval-ticks: 600
+      testing-interval-ticks: 100
+      candidate-rolls-per-pass: 4
+    # A successful parent waits ten minutes before planting another sapling.
+    cooldown-ticks: 12000
+    # Testing keeps the same placement rules but makes reproduction visible.
+    testing-chance-multiplier: 4.0
+    testing-cooldown-ticks: 200
   # ## MEDIUM is the fancy-tree form: a visible trunk, real branches, and a cloud-like crown.
   # MATURE and ANCIENT remain available in code but are not entered while this ceiling is active.
   # ## Shape revision 5 requires complete per-tree leaf ownership before pruning or finishing a transition.
@@ -354,6 +397,17 @@ tree-evolution:
       vine-chance: 0.03
       ground-detail-chance: 0.24
 
+# ## Closed vertical obsidian frames can form functional portals in irregular
+# shapes. Light the interior with flint and steel or a fire charge. Vanilla
+# rectangular portals are left entirely to Minecraft.
+shaped-portals:
+  enabled: true
+  minimum-interior-blocks: 6
+  maximum-interior-blocks: 400
+  maximum-width: 21
+  maximum-height: 21
+  debug: true
+
 # Nether corruption treats active Nether portals in the Overworld as sources
 # of slow terrain change. It does not use a configurable replacement map:
 # only internal vanilla-inspired natural block mimics are applied, and blocks
@@ -405,6 +459,9 @@ wind:
     placement-attempts: 48
     # Prevents endless leaf carpet buildup. Set to 0 to remove the cap.
     max-per-chunk: 96
+    # ## Prefer growing nearby incomplete piles to Minecraft's four-segment
+    # maximum before scattering another single-segment litter tile.
+    stack-search-radius: 2
   debug:
     recent-events: 40
 
@@ -416,6 +473,9 @@ puddles:
   step-ticks: 20
   radius: 32
   max-puddles-per-world: 300
+  # ## Packet puddles outside every player's active area are retired so old
+  # travel paths cannot consume the entire world pool.
+  retention-radius-multiplier: 3
   required-player-distance-chunks: 6
   growth:
     seed-chance: 0.16
@@ -434,6 +494,8 @@ puddles:
   render:
     mode: PACKET
     restore-on-disable: true
+    # ## Re-send unchanged fake water after chunk/client refreshes.
+    reassert-interval-ticks: 40
   testing:
     enabled: true
     step-ticks: 10

@@ -6,6 +6,7 @@ final class TrunkPlanner {
     void plan(TreePlan plan, TreeDna dna) {
         int visibleHeight = TreeSpeciesStageStyle.visibleHeight(dna);
         for (int y = dna.baseY(); y < dna.baseY() + visibleHeight; y++) {
+            planLeanTransition(plan, dna, y);
             int width = TreeSpeciesStageStyle.trunkWidthAt(dna, y);
             for (int ox : offsets(width)) {
                 for (int oz : offsets(width)) {
@@ -24,6 +25,47 @@ final class TrunkPlanner {
                 }
             }
         }
+    }
+
+    private void planLeanTransition(TreePlan plan, TreeDna dna, int y) {
+        if (y <= dna.baseY()) {
+            return;
+        }
+
+        int previousX = dna.trunkXAt(y - 1);
+        int previousZ = dna.trunkZAt(y - 1);
+        int targetX = dna.trunkXAt(y);
+        int targetZ = dna.trunkZAt(y);
+        if (previousX == targetX && previousZ == targetZ) {
+            return;
+        }
+
+        // ## A leaning center cannot jump diagonally between Y layers. These
+        // planned support cells keep gradual placement face-connected.
+        plan.add(trunkBlock(dna, previousX, y, previousZ, Axis.Y));
+        int x = previousX;
+        int z = previousZ;
+        while (x != targetX) {
+            x += Integer.signum(targetX - x);
+            plan.add(trunkBlock(dna, x, y, z, Axis.X));
+        }
+        while (z != targetZ) {
+            z += Integer.signum(targetZ - z);
+            plan.add(trunkBlock(dna, x, y, z, Axis.Z));
+        }
+    }
+
+    private PlannedTreeBlock trunkBlock(
+            TreeDna dna, int x, int y, int z, Axis axis) {
+        return new PlannedTreeBlock(
+                x,
+                y,
+                z,
+                dna.species().logMaterial(),
+                TreeBlockRole.TRUNK,
+                axis,
+                null
+        );
     }
 
     static boolean isTrunkCell(TreeDna dna, int y, int ox, int oz, int width) {

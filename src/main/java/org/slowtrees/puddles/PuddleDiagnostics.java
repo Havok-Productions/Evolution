@@ -21,7 +21,9 @@ final class PuddleDiagnostics {
     private final AtomicLong soaked = new AtomicLong();
     private final AtomicLong dried = new AtomicLong();
     private final AtomicLong rendered = new AtomicLong();
+    private final AtomicLong reasserted = new AtomicLong();
     private final AtomicLong restored = new AtomicLong();
+    private final AtomicLong retired = new AtomicLong();
     private final AtomicLong rejected = new AtomicLong();
     private final AtomicLong regionSkips = new AtomicLong();
     private final AtomicLong nextSaveMillis = new AtomicLong();
@@ -53,8 +55,16 @@ final class PuddleDiagnostics {
         rendered.addAndGet(Math.max(0L, amount));
     }
 
+    void recordReasserted(long amount) {
+        reasserted.addAndGet(Math.max(0L, amount));
+    }
+
     void recordRestored(long amount) {
         restored.addAndGet(Math.max(0L, amount));
+    }
+
+    void recordRetired(long amount) {
+        retired.addAndGet(Math.max(0L, amount));
     }
 
     void recordRejected() {
@@ -124,7 +134,9 @@ final class PuddleDiagnostics {
         yaml.set("counters.soaked", soaked.get());
         yaml.set("counters.dried", dried.get());
         yaml.set("counters.rendered-packet-blocks", rendered.get());
+        yaml.set("counters.reasserted-packet-blocks", reasserted.get());
         yaml.set("counters.restored-packet-blocks", restored.get());
+        yaml.set("counters.retired-distant-puddles", retired.get());
         yaml.set("counters.rejected", rejected.get());
         yaml.set("counters.region-skips", regionSkips.get());
         yaml.set("recent-events", snapshot());

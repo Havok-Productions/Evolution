@@ -34,6 +34,7 @@ public final class WaveFeature implements PluginFeature, Listener {
     private final WaveModel model = new WaveModel();
     private final WaveHeightStack heightStack = new WaveHeightStack();
     private final WaveEnvironmentModel environment = new WaveEnvironmentModel();
+    private final ShoreRunupPolicy shoreRunupPolicy = new ShoreRunupPolicy();
     private final WaveDiagnostics diagnostics = new WaveDiagnostics();
     private final WaveSurfaceCache surfaceCache = new WaveSurfaceCache();
     private final WaveLakeFlowCache lakeFlowCache = new WaveLakeFlowCache();
@@ -411,6 +412,7 @@ public final class WaveFeature implements PluginFeature, Listener {
 
             boolean shoreZone = surface.hasShoreBias()
                     && surface.shoreDistance() <= currentConfig.shoreResponseDistance();
+            double incomingHeight = sample.height();
             if (shoreZone) {
                 sample = model.shoreAdjusted(currentConfig.ovalSettings(), sample,
                         surface.shoreDistance(), surface.waterDepth(),
@@ -421,6 +423,9 @@ public final class WaveFeature implements PluginFeature, Listener {
             if (!sample.crest()) {
                 continue;
             }
+            boolean physicalShoreImpact = shoreZone
+                    && shoreRunupPolicy.hasArrived(
+                            surface.shoreDistance(), frontCell.fizzling);
 
             if (frontCell.contributors >= 2) {
                 mergedColumns++;
@@ -428,7 +433,7 @@ public final class WaveFeature implements PluginFeature, Listener {
             if (frontCell.shoreGuided) {
                 lakeInboundColumns++;
             }
-            if (sample.shoreImpact()) {
+            if (physicalShoreImpact) {
                 shoreImpacts++;
             }
             if (sample.fizzling()) {
@@ -442,7 +447,7 @@ public final class WaveFeature implements PluginFeature, Listener {
             crests++;
             diagnostics.recordLayer(sample.layer());
 
-            boolean shoreSplash = sample.shoreImpact() && sample.layer() >= 2;
+            boolean shoreSplash = physicalShoreImpact && sample.layer() >= 2;
             boolean openWaterFoam = !shoreZone && sample.layer() == 4
                     && Math.floorMod((x * 31) + (z * 17) + (int) (tick / 20L), 19) == 0;
             if (currentConfig.particlesEnabled() && particles < currentConfig.particleBudget()
@@ -451,10 +456,22 @@ public final class WaveFeature implements PluginFeature, Listener {
                         sample.energy(), shoreSplash);
                 particles++;
             }
-            if (currentConfig.shorelineRunupEnabled() && sample.shoreImpact()
-                    && sample.energy() > 0.68D) {
+            boolean eligibleRunupEnergy = sample.energy() > 0.68D;
+            if (currentConfig.shorelineRunupEnabled()
+                    && sample.shoreImpact() && eligibleRunupEnergy
+                    && !physicalShoreImpact) {
+                diagnostics.recordRunupPrearrivalStop();
+                plugin.pathDebug().traceSampled(plugin, "waves",
+                        "runup.blocked-prearrival",
+                        "water=" + x + "," + surface.y() + "," + z
+                                + " shore-distance=" + surface.shoreDistance()
+                                + " front-fizzling=" + frontCell.fizzling
+                                + " ## shore compression is visual; land run-up waits for physical arrival");
+            }
+            if (currentConfig.shorelineRunupEnabled()
+                    && physicalShoreImpact && eligibleRunupEnergy) {
                 runups += addShorelineRunup(world, currentConfig, visuals,
-                        surface, sample.waterLevel(), tick);
+                        surface, incomingHeight, sample.waterLevel(), tick);
             }
         }
 
@@ -488,7 +505,8 @@ public final class WaveFeature implements PluginFeature, Listener {
     }
     private int addShorelineRunup(World world, WaveConfig currentConfig,
             Map<WaveRenderer.WaveKey, Integer> visuals,
-            WaveSurfaceCache.SurfaceColumn surface, int level, long tick) {
+            WaveSurfaceCache.SurfaceColumn surface, double incomingHeight,
+            int level, long tick) {
         if (!surface.hasShoreBias()) {
             return 0;
         }
@@ -499,6 +517,8 @@ public final class WaveFeature implements PluginFeature, Listener {
         int allowedBlocks = Math.max(1,
                 (int) ((tick - frontStarted) / currentConfig.runupAdvanceTicksPerBlock()) + 1);
         int maxBlocks = Math.min(currentConfig.shorelineRunupDistance(), allowedBlocks);
+        int maximumReachableGroundY = shoreRunupPolicy.maximumReachableGroundY(
+                surface.y(), incomingHeight);
         int added = 0;
         // ## The detected coastline is the run-up origin. Earlier logic started at
         // the offshore crest, so a six-block run-up could never reach a shore found
@@ -510,6 +530,19 @@ public final class WaveFeature implements PluginFeature, Listener {
                 break;
             }
             int groundY = world.getHighestBlockYAt(x, z);
+            if (!shoreRunupPolicy.canReachGround(
+                    surface.y(), groundY, incomingHeight)) {
+                diagnostics.recordRunupHeightStop();
+                plugin.pathDebug().traceSampled(plugin, "waves",
+                        "runup.blocked-crest-height",
+                        "water-y=" + surface.y()
+                                + " incoming-height=" + rounded(incomingHeight)
+                                + " max-ground-y=" + maximumReachableGroundY
+                                + " terrain-y=" + groundY
+                                + " at=" + x + "," + z
+                                + " ## land higher than the incoming crest stops propagation");
+                break;
+            }
             if (surface.shoreY() >= 0 && groundY > surface.shoreY()) {
                 // ## Run-up crosses level shore ground but never climbs above coast elevation.
                 break;

@@ -21,12 +21,14 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import org.bukkit.Axis;
 import org.bukkit.Bukkit;
+import org.bukkit.HeightMap;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.Biome;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.Bisected;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.MultipleFacing;
 import org.bukkit.block.data.Orientable;
@@ -72,8 +74,16 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             Material.DANDELION,
             Material.POPPY,
             Material.BLUE_ORCHID,
+            Material.ALLIUM,
+            Material.AZURE_BLUET,
+            Material.RED_TULIP,
+            Material.ORANGE_TULIP,
+            Material.WHITE_TULIP,
+            Material.PINK_TULIP,
             Material.PINK_PETALS,
             Material.OXEYE_DAISY,
+            Material.CORNFLOWER,
+            Material.LILY_OF_THE_VALLEY,
             Material.BROWN_MUSHROOM,
             Material.RED_MUSHROOM
     );
@@ -90,6 +100,10 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     private final ConcurrentMap<String, CachedProjectionProgress> projectionProgressCache = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, TreeFocusPool> focusedTreePools = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> focusYieldUntil = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> seedlingCooldownUntil = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> seedlingSearchSequence = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, Long> nextReservedSeedlingSearchMillis = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, Long> reservedSeedlingPassSequence = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, CachedTreeCandidate> focusedCandidateCache = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, CachedTreeCandidate> nearestCandidateCache = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, CachedKnownCandidates> knownCandidateCache = new ConcurrentHashMap<>();
@@ -131,6 +145,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         focusedTreePools.clear();
         focusedCandidateCache.clear();
         focusYieldUntil.clear();
+        nextReservedSeedlingSearchMillis.clear();
+        reservedSeedlingPassSequence.clear();
         projectionProgressCache.clear();
     }
 
@@ -143,6 +159,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         focusedTreePools.clear();
         focusedCandidateCache.clear();
         focusYieldUntil.clear();
+        nextReservedSeedlingSearchMillis.clear();
+        reservedSeedlingPassSequence.clear();
         projectionProgressCache.clear();
         plugin.pathDebug().trace(plugin, "tree-evolution", "config.reload", config.summary());
     }
@@ -313,6 +331,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             UUID playerId = player.getUniqueId();
             if (!player.isOnline()) {
                 focusedTreePools.remove(playerId);
+                nextReservedSeedlingSearchMillis.remove(playerId);
+                reservedSeedlingPassSequence.remove(playerId);
                 plugin.pathDebug().trace(plugin, "tree-evolution", "tick.skip.offline-player", "player no longer online");
                 sample.detail("offline-player");
                 return 0;
@@ -508,6 +528,13 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 }
             }
 
+            // ## Reproduction has one independently paced lane. A successful
+            // sapling may add one extra block, but structural tree work keeps
+            // its original block budget and therefore cannot be starved.
+            int reservedSeedlings = runReservedSeedlingSearch(
+                    playerId, origin, currentConfig);
+            placed += reservedSeedlings;
+
             if (pool.isEmpty()) {
                 focusedTreePools.remove(playerId, pool);
             }
@@ -684,7 +711,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         Biome biome = candidate.baseBlock().getBiome();
         CachedTreePlan cachedPlan = cachedPlan(
                 dna, biome, currentConfig.rootsEnabled());
-        TreeGrowthIntent requestedIntent = refreshIntent(candidate, dna);
+        TreeGrowthIntent requestedIntent = refreshIntent(candidate, dna, currentConfig);
         diagnostics.recordPlan(currentConfig, dna, cachedPlan.plan(),
                 cachedPlan.orderedBlocks(), candidate.world(), false);
 
@@ -800,16 +827,14 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 "requested=" + requestedIntent
                         + " cursor=" + dna.planCursor()
                         + " blocked=" + dna.blockedAttempts());
-        Optional<Block> seedlingSpot = intent == TreeGrowthIntent.SEEDLING ? findSeedlingSpot(candidate, dna) : Optional.empty();
+        Optional<Block> seedlingSpot = intent == TreeGrowthIntent.SEEDLING
+                ? findSeedlingSpot(candidate.world(), dna, currentConfig)
+                : Optional.empty();
         if (seedlingSpot.isPresent()) {
-            Block sapling = seedlingSpot.get();
-            sapling.setType(dna.species().saplingMaterial(), false);
+            spreadSeedling(seedlingSpot.get(), dna, currentConfig,
+                    "intent");
             dna.markPlacedForIntent(intent, dna.planCursor());
             dna.consumeStageGrowthBurst();
-            changedBlocks.incrementAndGet();
-            diagnostics.recordSeedling(plugin, currentConfig, sapling, dna);
-            plugin.pathDebug().trace(plugin, "tree-evolution", "seedling.spread",
-                    dna.species().saplingMaterial() + " child-of=" + dna.key() + " at " + format(sapling));
             sample.changedUnits(1).detail("seedling.spread " + dna.key());
             return true;
         }
@@ -817,7 +842,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         if (intent == TreeGrowthIntent.CANOPY) {
             Optional<Block> exposedLog = findExposedUpperLog(candidate, dna);
             if (exposedLog.isPresent()) {
-                int liftedLeaves = coverExposedLog(candidate, dna, currentConfig, exposedLog.get());
+                int liftedLeaves = coverExposedLog(candidate, dna, currentConfig,
+                        exposedLog.get(), cachedPlan.blocksByKey());
                 if (liftedLeaves > 0) {
                     dna.markPlacedForIntent(intent, dna.planCursor());
                     dna.consumeStageGrowthBurst();
@@ -837,7 +863,9 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             Block target = plannedTarget.get().target();
             place(target, plannedBlock);
             dna.markPlacedForIntent(intent, plannedTarget.get().nextCursor());
-            int liftedLeaves = maybeCoverExposedTopLog(candidate, dna, currentConfig, target, plannedBlock);
+            int liftedLeaves = maybeCoverExposedTopLog(candidate, dna,
+                    currentConfig, target, plannedBlock,
+                    cachedPlan.blocksByKey());
             if (intent != TreeGrowthIntent.CLEANUP && intent != TreeGrowthIntent.SEEDLING) {
                 dna.consumeStageGrowthBurst();
             }
@@ -979,7 +1007,11 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             case VINE, GROUND_DETAIL, FALLEN_LOG, SAPLING, ROOT -> 1000 + block.y();
         };
     }
-    private TreeGrowthIntent refreshIntent(TreeCandidate candidate, TreeDna dna) {
+    private TreeGrowthIntent refreshIntent(
+            TreeCandidate candidate,
+            TreeDna dna,
+            TreeEvolutionConfig currentConfig
+    ) {
         if (dna.stageCleanupBurst() > 0) {
             dna.setCurrentIntent(TreeGrowthIntent.CLEANUP);
             return dna.currentIntent();
@@ -992,7 +1024,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             dna.setCurrentIntent(stageBurstIntent(candidate, dna));
             return dna.currentIntent();
         }
-        TreeGrowthIntent preferred = preferredIntent(candidate, dna);
+        TreeGrowthIntent preferred = preferredIntent(
+                candidate, dna, currentConfig);
         if (dna.blockedAttempts() >= 3 || dna.age() - dna.lastIntentChangeAge() >= intentSpan(dna, dna.currentIntent())) {
             dna.setCurrentIntent(preferred);
         }
@@ -1165,7 +1198,11 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         return TreeGrowthIntent.DETAIL;
     }
 
-    private TreeGrowthIntent preferredIntent(TreeCandidate candidate, TreeDna dna) {
+    private TreeGrowthIntent preferredIntent(
+            TreeCandidate candidate,
+            TreeDna dna,
+            TreeEvolutionConfig currentConfig
+    ) {
         Random random = new Random(dna.seed() ^ (dna.age() * 43L) ^ 0x1A17EEL);
         if (dna.damageCount() > 0) {
             return weightedIntent(random, TreeGrowthIntent.REPAIR, 70, TreeGrowthIntent.CANOPY, 30);
@@ -1184,10 +1221,15 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             return weightedIntent(random, TreeGrowthIntent.HEIGHT, 50, TreeGrowthIntent.BRANCH, 28, TreeGrowthIntent.CANOPY, 22);
         }
         if (dna.maturityStage() == TreeMaturityStage.MEDIUM) {
-            return weightedIntent(random, TreeGrowthIntent.CANOPY, 54, TreeGrowthIntent.BRANCH, 26, TreeGrowthIntent.HEIGHT, 14, TreeGrowthIntent.DETAIL, 6);
+            int seedlingWeight = reproductionWeight(dna, currentConfig);
+            return weightedIntent(random, TreeGrowthIntent.CANOPY, 54,
+                    TreeGrowthIntent.BRANCH, 26,
+                    TreeGrowthIntent.HEIGHT, 14,
+                    TreeGrowthIntent.DETAIL, 6,
+                    TreeGrowthIntent.SEEDLING, seedlingWeight);
         }
         if (dna.maturityStage() == TreeMaturityStage.MATURE || dna.maturityStage() == TreeMaturityStage.ANCIENT) {
-            int seedlingWeight = dna.age() > 24 && dna.damageCount() == 0 ? 7 : 0;
+            int seedlingWeight = reproductionWeight(dna, currentConfig);
             return weightedIntent(random, TreeGrowthIntent.CANOPY, 40, TreeGrowthIntent.DETAIL, 26, TreeGrowthIntent.BRANCH, 20, TreeGrowthIntent.SEEDLING, seedlingWeight, TreeGrowthIntent.WIDTH, dna.hugeArchitecture() ? 7 : 0);
         }
         return TreeGrowthIntent.HEIGHT;
@@ -1427,46 +1469,304 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         }
         staleByKey.putIfAbsent(leafKey, leaf);
     }
-    private Optional<Block> findSeedlingSpot(TreeCandidate candidate, TreeDna dna) {
-        if (dna.maturityStage() != TreeMaturityStage.MATURE && dna.maturityStage() != TreeMaturityStage.ANCIENT) {
-            return Optional.empty();
+    private int runReservedSeedlingSearch(
+            UUID playerId,
+            Location origin,
+            TreeEvolutionConfig currentConfig
+    ) {
+        TreeReproductionConfig reproduction = currentConfig.reproduction();
+        if (!reproduction.enabled()) {
+            return 0;
         }
-        if (dna.age() < 20 || dna.damageCount() > 4) {
-            return Optional.empty();
+        long now = System.currentTimeMillis();
+        long nextSearch = nextReservedSeedlingSearchMillis.getOrDefault(
+                playerId, 0L);
+        if (now < nextSearch) {
+            return 0;
         }
-        double chance = dna.maturityStage() == TreeMaturityStage.ANCIENT ? 0.12D : 0.045D;
-        if (dna.rarity() == TreeRarity.LANDMARK || dna.personality() == TreePersonality.ANCIENT_LANDMARK) {
-            chance *= 1.8D;
+        nextReservedSeedlingSearchMillis.put(playerId,
+                now + reproduction.reservedSearchIntervalMillis());
+
+        try (ReportSample sample = plugin.resourceReporter().begin(
+                "tree-evolution", "action.reserved-seedling-search")) {
+            World world = origin.getWorld();
+            if (world == null) {
+                sample.detail("missing-world");
+                return 0;
+            }
+            int searchRadius = currentConfig.searchRadius();
+            long searchRadiusSquared = (long) searchRadius * searchRadius;
+            List<TreeDna> eligible = new ArrayList<>();
+            for (TreeDna dna : treeDna.values()) {
+                if (!world.getUID().equals(dna.worldId())
+                        || !reproduction.eligible(dna, now,
+                                seedlingCooldownUntil.getOrDefault(
+                                        dna.key(), 0L))) {
+                    continue;
+                }
+                long dx = (long) dna.baseX() - origin.getBlockX();
+                long dz = (long) dna.baseZ() - origin.getBlockZ();
+                if ((dx * dx) + (dz * dz) > searchRadiusSquared) {
+                    continue;
+                }
+                int chunkX = dna.baseX() >> 4;
+                int chunkZ = dna.baseZ() >> 4;
+                if (!world.isChunkLoaded(chunkX, chunkZ)
+                        || !Bukkit.isOwnedByCurrentRegion(
+                                world, chunkX, chunkZ, 0)) {
+                    continue;
+                }
+                eligible.add(dna);
+            }
+            eligible.sort(Comparator.comparing(TreeDna::key));
+            if (eligible.isEmpty()) {
+                plugin.pathDebug().traceSampled(plugin, "tree-evolution",
+                        "seedling.lane.no-eligible-parent",
+                        "near=" + format(origin)
+                                + " ## no loaded, owned, healthy tree meets the reproduction stage/age gate");
+                sample.detail("no-eligible-parent");
+                return 0;
+            }
+
+            long passSequence = reservedSeedlingPassSequence.merge(
+                    playerId, 1L, Long::sum);
+            int start = (int) Math.floorMod(
+                    passSequence + playerId.getLeastSignificantBits(),
+                    eligible.size());
+            int candidateRolls = 0;
+            for (int offset = 0;
+                    offset < eligible.size()
+                            && candidateRolls < reproduction.candidateRollsPerPass();
+                    offset++) {
+                TreeDna dna = eligible.get((start + offset) % eligible.size());
+                Block base = world.getBlockAt(
+                        dna.baseX(), dna.baseY(), dna.baseZ());
+                if (base.getType() != dna.species().logMaterial()) {
+                    continue;
+                }
+                candidateRolls++;
+                double chance = reproduction.chanceFor(dna);
+                Random chanceRoll = new Random(dna.seed()
+                        ^ (passSequence * 0xD1342543DE82EF95L)
+                        ^ playerId.getMostSignificantBits());
+                if (chance <= 0.0D || chanceRoll.nextDouble() >= chance) {
+                    plugin.pathDebug().traceSampled(plugin,
+                            "tree-evolution", "seedling.lane.chance-miss",
+                            "tree=" + dna.key() + " chance="
+                                    + Math.round(chance * 1000.0D) / 10.0D
+                                    + "% roll=" + candidateRolls + "/"
+                                    + reproduction.candidateRollsPerPass());
+                    continue;
+                }
+                if (!canWorkAt(base.getLocation(), currentConfig)) {
+                    plugin.pathDebug().traceSampled(plugin,
+                            "tree-evolution", "seedling.lane.parent-gate",
+                            "tree=" + dna.key()
+                                    + " ## parent is outside the current safe Folia/player/protection area");
+                    continue;
+                }
+
+                plugin.pathDebug().trace(plugin, "tree-evolution",
+                        "seedling.lane.search",
+                        "tree=" + dna.key() + " pass=" + passSequence
+                                + " candidates=" + eligible.size()
+                                + " rolls=" + candidateRolls
+                                + " attempts=" + reproduction.searchAttempts());
+                Optional<Block> target = findSeedlingSpot(
+                        world, dna, currentConfig);
+                sample.workUnits(candidateRolls
+                        + reproduction.searchAttempts());
+                if (target.isEmpty()) {
+                    sample.detail("search-exhausted tree=" + dna.key());
+                    return 0;
+                }
+                spreadSeedling(target.get(), dna, currentConfig,
+                        "reserved-lane");
+                plugin.pathDebug().trace(plugin, "tree-evolution",
+                        "seedling.lane.spread",
+                        "tree=" + dna.key() + " pass=" + passSequence
+                                + " ## independently paced reproduction placed one sapling without consuming structural budget");
+                sample.changedUnits(1).detail(
+                        "spread tree=" + dna.key());
+                return 1;
+            }
+
+            plugin.pathDebug().traceSampled(plugin, "tree-evolution",
+                    "seedling.lane.no-chance-pass",
+                    "eligible=" + eligible.size() + " rolls="
+                            + candidateRolls + "/"
+                            + reproduction.candidateRollsPerPass());
+            sample.workUnits(candidateRolls).detail("no-chance-pass");
+            return 0;
         }
-        Random random = new Random(dna.seed() ^ (dna.age() * 31L) ^ 0x5EEDL);
-        if (random.nextDouble() > chance) {
+    }
+    private int reproductionWeight(
+            TreeDna dna,
+            TreeEvolutionConfig currentConfig
+    ) {
+        TreeReproductionConfig reproduction = currentConfig.reproduction();
+        long now = System.currentTimeMillis();
+        if (!reproduction.eligible(dna, now,
+                seedlingCooldownUntil.getOrDefault(dna.key(), 0L))) {
+            return 0;
+        }
+        double chance = reproduction.chanceFor(dna);
+        return chance <= 0.0D
+                ? 0
+                : Math.max(1, (int) Math.round(chance * 100.0D));
+    }
+
+    private Optional<Block> findSeedlingSpot(
+            World world,
+            TreeDna dna,
+            TreeEvolutionConfig currentConfig
+    ) {
+        TreeReproductionConfig reproduction = currentConfig.reproduction();
+        long now = System.currentTimeMillis();
+        if (!reproduction.eligible(dna, now,
+                seedlingCooldownUntil.getOrDefault(dna.key(), 0L))) {
             return Optional.empty();
         }
 
-        int radius = dna.maturityStage() == TreeMaturityStage.ANCIENT ? 10 : 7;
-        for (int attempt = 0; attempt < 18; attempt++) {
-            int dx = random.nextInt(radius * 2 + 1) - radius;
-            int dz = random.nextInt(radius * 2 + 1) - radius;
-            if ((dx * dx) + (dz * dz) < 9 || (dx * dx) + (dz * dz) > radius * radius) {
+        long sequence = seedlingSearchSequence.merge(
+                dna.key(), 1L, Long::sum);
+        long searchSeed = dna.seed()
+                ^ (dna.age() * 31L)
+                ^ (sequence * 0x9E3779B97F4A7C15L)
+                ^ 0x5EEDL;
+        int minimumRadius = reproduction.minimumRadius();
+        int radius = reproduction.radiusFor(dna);
+        List<TreeSeedlingSearchPolicy.Offset> offsets =
+                TreeSeedlingSearchPolicy.sampleRing(
+                        minimumRadius, radius,
+                        reproduction.searchAttempts(), searchSeed);
+        int regionRejects = 0;
+        int surfaceRejects = 0;
+        int lightRejects = 0;
+        int spacingRejects = 0;
+        int protectionRejects = 0;
+        for (TreeSeedlingSearchPolicy.Offset offset : offsets) {
+            int x = dna.baseX() + offset.x();
+            int z = dna.baseZ() + offset.z();
+            int chunkX = x >> 4;
+            int chunkZ = z >> 4;
+            if (!world.isChunkLoaded(chunkX, chunkZ)
+                    || !Bukkit.isOwnedByCurrentRegion(
+                            world, chunkX, chunkZ, 0)) {
+                regionRejects++;
                 continue;
             }
-            Block surface = candidate.world().getHighestBlockAt(dna.baseX() + dx, dna.baseZ() + dz);
-            Block ground = surface.getRelative(BlockFace.DOWN);
-            if (!surface.getType().isAir() || !NATURAL_GROUND.contains(ground.getType()) || !surface.getWorld().isChunkLoaded(surface.getX() >> 4, surface.getZ() >> 4)) {
+
+            Block ground = world.getHighestBlockAt(
+                    x, z, HeightMap.MOTION_BLOCKING_NO_LEAVES);
+            Block surface = ground.getRelative(BlockFace.UP);
+            if (!canReplaceForSeedling(surface)
+                    || !NATURAL_GROUND.contains(ground.getType())) {
+                surfaceRejects++;
                 continue;
             }
             if (surface.getLightFromSky() < 9) {
+                lightRejects++;
                 continue;
             }
-            if (nearExistingSaplingOrLog(surface, 3)) {
+            if (nearExistingSaplingOrLog(
+                    surface, reproduction.spacingRadius())) {
+                spacingRejects++;
                 continue;
             }
-            if (plugin.canEvolveAt(surface.getLocation(),
-                    "tree-evolution")) {
-                return Optional.of(surface);
+            if (!plugin.canEvolveAt(surface.getLocation(),
+                    "tree-reproduction")) {
+                protectionRejects++;
+                continue;
             }
+            if (!canClearSeedlingVegetation(surface)) {
+                protectionRejects++;
+                continue;
+            }
+            plugin.pathDebug().trace(plugin, "tree-evolution",
+                    "seedling.search-pass",
+                    "tree=" + dna.key() + " sequence=" + sequence
+                            + " ring=" + minimumRadius + ".." + radius
+                            + " target=" + format(surface)
+                            + " replacing=" + surface.getType());
+            return Optional.of(surface);
         }
+
+        String summary = "tree=" + dna.key()
+                + " sequence=" + sequence
+                + " ring=" + minimumRadius + ".." + radius
+                + " attempts=" + offsets.size()
+                + " sampled-ring=" + offsets.size()
+                + " region=" + regionRejects
+                + " surface=" + surfaceRejects
+                + " light=" + lightRejects
+                + " spacing=" + spacingRejects
+                + " protection=" + protectionRejects;
+        diagnostics.recordReject(currentConfig,
+                "seedling-search-exhausted", summary);
+        plugin.pathDebug().traceSampled(plugin, "tree-evolution",
+                "seedling.search-exhausted",
+                summary + " ## the next retry uses a fresh deterministic sequence");
         return Optional.empty();
+    }
+    private void spreadSeedling(
+            Block sapling,
+            TreeDna dna,
+            TreeEvolutionConfig currentConfig,
+            String source
+    ) {
+        Material replaced = sapling.getType();
+        clearSeedlingVegetation(sapling);
+        sapling.setType(dna.species().saplingMaterial(), false);
+        changedBlocks.incrementAndGet();
+        diagnostics.recordSeedling(plugin, currentConfig, sapling, dna);
+        seedlingCooldownUntil.put(dna.key(),
+                System.currentTimeMillis()
+                        + currentConfig.reproduction().cooldownMillis());
+        plugin.pathDebug().trace(plugin, "tree-evolution",
+                "seedling.spread",
+                dna.species().saplingMaterial()
+                        + " child-of=" + dna.key()
+                        + " source=" + source
+                        + " replaced=" + replaced
+                        + " at " + format(sapling));
+    }
+    private boolean canReplaceForSeedling(Block surface) {
+        return surface.getType().isAir()
+                || NATURAL_DETAILS.contains(surface.getType());
+    }
+
+    private boolean canClearSeedlingVegetation(Block surface) {
+        BlockData data = surface.getBlockData();
+        if (!(data instanceof Bisected bisected)) {
+            return true;
+        }
+        Block companion = bisected.getHalf() == Bisected.Half.TOP
+                ? surface.getRelative(BlockFace.DOWN)
+                : surface.getRelative(BlockFace.UP);
+        return companion.getType() != surface.getType()
+                || (isOwnedLoaded(companion)
+                        && plugin.canEvolveAt(
+                                companion.getLocation(),
+                                "tree-reproduction"));
+    }
+
+    private void clearSeedlingVegetation(Block surface) {
+        BlockData data = surface.getBlockData();
+        if (!(data instanceof Bisected bisected)) {
+            return;
+        }
+        Block companion = bisected.getHalf() == Bisected.Half.TOP
+                ? surface.getRelative(BlockFace.DOWN)
+                : surface.getRelative(BlockFace.UP);
+        if (companion.getType() == surface.getType()) {
+            companion.setType(Material.AIR, false);
+            plugin.pathDebug().traceSampled(plugin, "tree-evolution",
+                    "seedling.replace-tall-vegetation",
+                    "cleared=" + surface.getType()
+                            + " companion=" + format(companion)
+                            + " ## both halves are cleared before the sapling is placed");
+        }
     }
 
     private boolean nearExistingSaplingOrLog(Block center, int radius) {
@@ -2149,14 +2449,20 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         return Optional.empty();
     }
 
-    private int maybeCoverExposedTopLog(TreeCandidate candidate, TreeDna dna, TreeEvolutionConfig currentConfig, Block trunk, PlannedTreeBlock plannedBlock) {
+    private int maybeCoverExposedTopLog(TreeCandidate candidate, TreeDna dna,
+            TreeEvolutionConfig currentConfig, Block trunk,
+            PlannedTreeBlock plannedBlock,
+            Map<String, PlannedTreeBlock> blocksByKey) {
         if (plannedBlock.role() != TreeBlockRole.TRUNK || trunk.getY() < candidate.topY()) {
             return 0;
         }
-        return coverExposedLog(candidate, dna, currentConfig, trunk);
+        return coverExposedLog(candidate, dna, currentConfig, trunk,
+                blocksByKey);
     }
 
-    private int coverExposedLog(TreeCandidate candidate, TreeDna dna, TreeEvolutionConfig currentConfig, Block trunk) {
+    private int coverExposedLog(TreeCandidate candidate, TreeDna dna,
+            TreeEvolutionConfig currentConfig, Block trunk,
+            Map<String, PlannedTreeBlock> blocksByKey) {
         if (hasAdjacentLeaf(trunk, dna.species().leafMaterial())) {
             return 0;
         }
@@ -2173,7 +2479,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         for (int index = 0; index < faces.size() && placed < desiredLeaves; index++) {
             BlockFace face = faces.get((index + offset) % faces.size());
             Block leaf = trunk.getRelative(face);
-            if (!canPlaceCanopyLiftLeaf(leaf, trunk, dna, currentConfig)) {
+            if (!canPlaceCanopyLiftLeaf(leaf, trunk, dna, currentConfig,
+                    blocksByKey)) {
                 continue;
             }
             placePersistentLeaf(leaf, dna.species().leafMaterial());
@@ -2193,7 +2500,15 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         return placed;
     }
 
-    private boolean canPlaceCanopyLiftLeaf(Block leaf, Block trunk, TreeDna dna, TreeEvolutionConfig currentConfig) {
+    private boolean canPlaceCanopyLiftLeaf(Block leaf, Block trunk, TreeDna dna,
+            TreeEvolutionConfig currentConfig,
+            Map<String, PlannedTreeBlock> blocksByKey) {
+        PlannedTreeBlock planned = blocksByKey.get(
+                leaf.getX() + ":" + leaf.getY() + ":" + leaf.getZ());
+        if (planned == null || planned.role() != TreeBlockRole.CANOPY
+                || planned.material() != dna.species().leafMaterial()) {
+            return false;
+        }
         int chunkX = leaf.getX() >> 4;
         int chunkZ = leaf.getZ() >> 4;
         if (!leaf.getWorld().isChunkLoaded(chunkX, chunkZ) || !Bukkit.isOwnedByCurrentRegion(leaf.getWorld(), chunkX, chunkZ, currentConfig.ownedChunkRadius())) {
@@ -3086,6 +3401,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 planCache.remove(dna.key());
                 projectionProgressCache.remove(dna.key());
                 focusYieldUntil.remove(dna.key());
+                seedlingCooldownUntil.remove(dna.key());
+                seedlingSearchSequence.remove(dna.key());
                 focusedCandidateCache.remove(dna.key());
                 removed++;
                 plugin.pathDebug().traceSampled(plugin, "tree-evolution", "cleanup.remove-dna",

@@ -26,6 +26,7 @@ final class TreeEvolutionConfig {
     private final long candidateCacheMillis;
     private final long damageStallTicks;
     private final boolean rootsEnabled;
+    private final TreeReproductionConfig reproduction;
     private final boolean testingEnabled;
     private final long testingStepTicks;
     private final long testingMinDelayTicks;
@@ -71,6 +72,7 @@ final class TreeEvolutionConfig {
             long candidateCacheMillis,
             long damageStallTicks,
             boolean rootsEnabled,
+            TreeReproductionConfig reproduction,
             boolean testingEnabled,
             long testingStepTicks,
             long testingMinDelayTicks,
@@ -115,6 +117,7 @@ final class TreeEvolutionConfig {
         this.candidateCacheMillis = candidateCacheMillis;
         this.damageStallTicks = damageStallTicks;
         this.rootsEnabled = rootsEnabled;
+        this.reproduction = reproduction;
         this.testingEnabled = testingEnabled;
         this.testingStepTicks = testingStepTicks;
         this.testingMinDelayTicks = testingMinDelayTicks;
@@ -168,6 +171,7 @@ final class TreeEvolutionConfig {
                 Math.max(250L, config.getLong("tree-evolution.candidate-cache-millis", 2500L)),
                 Math.max(20L, config.getLong("tree-evolution.damage-stall-ticks", 600L)),
                 config.getBoolean("tree-evolution.roots.enabled", false),
+                TreeReproductionConfig.load(config),
                 testing,
                 Math.max(1L, config.getLong("tree-evolution.testing.step-ticks", 5L)),
                 Math.max(1L, config.getLong("tree-evolution.testing.min-delay-ticks", 5L)),
@@ -267,6 +271,10 @@ final class TreeEvolutionConfig {
 
     boolean rootsEnabled() {
         return rootsEnabled;
+    }
+
+    TreeReproductionConfig reproduction() {
+        return reproduction;
     }
 
     boolean debugEnabled() {
@@ -382,6 +390,13 @@ final class TreeEvolutionConfig {
                 + ", dna-cleanup=" + dnaCleanupEnabled
                 + ", candidate-cache-ms=" + candidateCacheMillis
                 + ", roots=" + rootsEnabled
+                + ", reproduction=" + reproduction.enabled()
+                + "@" + reproduction.minimumStage()
+                + " ring=" + reproduction.minimumRadius()
+                + ".." + reproduction.maximumRadius()
+                + " search-attempts=" + reproduction.searchAttempts()
+                + " reserved-ms=" + reproduction.reservedSearchIntervalMillis()
+                + " candidate-rolls=" + reproduction.candidateRollsPerPass()
                 + ", debug=" + debugEnabled
                 + ", 3d-debug=" + debug3dEnabled()
                 + ", replay-debug=" + debugReplayEnabled()

@@ -15,6 +15,7 @@ import org.slowtrees.ecology.EcologyEvolutionFeature;
 import org.slowtrees.meadow.MeadowGrowthFeature;
 import org.slowtrees.nether.NetherCorruptionFeature;
 import org.slowtrees.puddles.PuddleFeature;
+import org.slowtrees.portal.ShapedPortalFeature;
 import org.slowtrees.regrowth.PlantRegrowthFeature;
 import org.slowtrees.treeevolution.TreeEvolutionFeature;
 import org.slowtrees.waves.WaveFeature;
@@ -29,6 +30,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
     private EcologyEvolutionFeature ecologyFeature;
     private TreeEvolutionFeature treeEvolutionFeature;
     private NetherCorruptionFeature netherFeature;
+    private ShapedPortalFeature shapedPortalFeature;
     private WindFeature windFeature;
     private PuddleFeature puddleFeature;
     private WaveFeature waveFeature;
@@ -70,6 +72,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
         ecologyFeature = new EcologyEvolutionFeature(this);
         treeEvolutionFeature = new TreeEvolutionFeature(this);
         netherFeature = new NetherCorruptionFeature(this);
+        shapedPortalFeature = new ShapedPortalFeature(this);
         windFeature = new WindFeature(this);
         puddleFeature = new PuddleFeature(this);
         waveFeature = new WaveFeature(this);
@@ -78,6 +81,7 @@ public final class SlowTreesPlugin extends JavaPlugin {
         registerFeature(ecologyFeature);
         registerFeature(treeEvolutionFeature);
         registerFeature(netherFeature);
+        registerFeature(shapedPortalFeature);
         registerFeature(windFeature);
         registerFeature(puddleFeature);
         registerFeature(waveFeature);
@@ -260,6 +264,10 @@ public final class SlowTreesPlugin extends JavaPlugin {
 
     public NetherCorruptionFeature netherFeature() {
         return netherFeature;
+    }
+
+    public ShapedPortalFeature shapedPortalFeature() {
+        return shapedPortalFeature;
     }
 
     public WindFeature windFeature() {

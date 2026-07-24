@@ -10,6 +10,7 @@ final class WindConfig {
     private final long leafLitterPlacementTicks;
     private final int requiredPlayerDistanceChunks;
     private final int maxLeafLitterPerChunk;
+    private final int leafLitterStackSearchRadius;
     private final int treeSearchRadius;
     private final int placementAttempts;
     private final int clearDriftRadius;
@@ -27,6 +28,7 @@ final class WindConfig {
             long leafLitterPlacementTicks,
             int requiredPlayerDistanceChunks,
             int maxLeafLitterPerChunk,
+            int leafLitterStackSearchRadius,
             int treeSearchRadius,
             int placementAttempts,
             int clearDriftRadius,
@@ -43,6 +45,7 @@ final class WindConfig {
         this.leafLitterPlacementTicks = leafLitterPlacementTicks;
         this.requiredPlayerDistanceChunks = requiredPlayerDistanceChunks;
         this.maxLeafLitterPerChunk = maxLeafLitterPerChunk;
+        this.leafLitterStackSearchRadius = leafLitterStackSearchRadius;
         this.treeSearchRadius = treeSearchRadius;
         this.placementAttempts = placementAttempts;
         this.clearDriftRadius = clearDriftRadius;
@@ -63,6 +66,8 @@ final class WindConfig {
                 Math.max(20L, config.getLong("wind.leaf-litter.placement-step-ticks", 80L)),
                 Math.max(0, config.getInt("wind.required-player-distance-chunks", 6)),
                 Math.max(0, config.getInt("wind.leaf-litter.max-per-chunk", 32)),
+                Math.max(0, Math.min(4,
+                        config.getInt("wind.leaf-litter.stack-search-radius", 2))),
                 Math.max(4, config.getInt("wind.tree-search-radius", 32)),
                 Math.max(1, config.getInt("wind.leaf-litter.placement-attempts", 48)),
                 Math.max(1, config.getInt("wind.weather.clear-drift-radius", 10)),
@@ -97,6 +102,10 @@ final class WindConfig {
 
     int maxLeafLitterPerChunk() {
         return maxLeafLitterPerChunk;
+    }
+
+    int leafLitterStackSearchRadius() {
+        return leafLitterStackSearchRadius;
     }
 
     int treeSearchRadius() {
@@ -140,6 +149,7 @@ final class WindConfig {
                 + ", litter-step=" + leafLitterPlacementTicks
                 + ", litter-attempts=" + placementAttempts
                 + ", litter-max-per-chunk=" + maxLeafLitterPerChunk
+                + ", litter-stack-radius=" + leafLitterStackSearchRadius
                 + ", particles=" + clearParticleCount + "/" + rainParticleCount + "/" + stormParticleCount
                 + ", debug-events=" + debugRecentEvents;
     }

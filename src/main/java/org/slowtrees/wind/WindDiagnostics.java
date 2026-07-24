@@ -25,6 +25,7 @@ final class WindDiagnostics {
     private final AtomicLong litterRejectedPlayerDistance = new AtomicLong();
     private final AtomicLong litterRejectedChunkCap = new AtomicLong();
     private final AtomicLong litterPlaced = new AtomicLong();
+    private final AtomicLong litterStacked = new AtomicLong();
     private final AtomicBoolean saveRunning = new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
     private final Deque<String> recentEvents = new ArrayDeque<>();
@@ -68,6 +69,10 @@ final class WindDiagnostics {
 
     void recordLitterPlaced() {
         litterPlaced.incrementAndGet();
+    }
+
+    void recordLitterStacked() {
+        litterStacked.incrementAndGet();
     }
 
     void recordEvent(WindConfig config, String event) {
@@ -140,6 +145,7 @@ final class WindDiagnostics {
         yaml.set("wind.counters.litter-rejected-player-distance", litterRejectedPlayerDistance.get());
         yaml.set("wind.counters.litter-rejected-chunk-cap", litterRejectedChunkCap.get());
         yaml.set("wind.counters.litter-placed", litterPlaced.get());
+        yaml.set("wind.counters.litter-stacked", litterStacked.get());
         yaml.set("wind.recent-events", recentEventsSnapshot());
         yaml.set("wind.notes", "If canopies-found rises but litter-targets-found stays 0, no valid natural ground target was found.");
 

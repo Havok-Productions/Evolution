@@ -50,6 +50,7 @@ final class WaveDiagnostics {
     private final AtomicLong fetchAttenuatedColumns = new AtomicLong();
     private final AtomicLong shoreHeightCaps = new AtomicLong();
     private final AtomicLong runupHeightStops = new AtomicLong();
+    private final AtomicLong runupPrearrivalStops = new AtomicLong();
     private final AtomicLong expandingColumns = new AtomicLong();
     private final AtomicLong closingColumns = new AtomicLong();
     private final AtomicLong lakeInboundColumns = new AtomicLong();
@@ -206,6 +207,7 @@ final class WaveDiagnostics {
     }
 
     void recordRunupHeightStop() { runupHeightStops.incrementAndGet(); }
+    void recordRunupPrearrivalStop() { runupPrearrivalStops.incrementAndGet(); }
     void recordOvalFrame(int pulseContributors, int mergedColumns, int impacts, int expanding, int closing) {
         ovalPulseContributors.addAndGet(Math.max(0, pulseContributors));
         ovalMergedColumns.addAndGet(Math.max(0, mergedColumns));
@@ -304,6 +306,7 @@ final class WaveDiagnostics {
         yaml.set("counters.shore-response.fetch-attenuated-open-water-columns", fetchAttenuatedColumns.get());
         yaml.set("counters.shore-response.height-capped-columns", shoreHeightCaps.get());
         yaml.set("counters.shore-response.runup-height-stops", runupHeightStops.get());
+        yaml.set("counters.shore-response.runup-prearrival-stops", runupPrearrivalStops.get());
         yaml.set("counters.lake-flow.inbound-columns", lakeInboundColumns.get());
         yaml.set("counters.lake-flow.latest-shore-guided-components", latestLakeComponents.get());
         yaml.set("counters.lake-flow.latest-enclosed-components", latestEnclosedLakeComponents.get());

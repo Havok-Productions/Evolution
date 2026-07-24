@@ -16,6 +16,8 @@ final class MeadowGrowthConfig {
     private final int attemptsPerStep;
     private final int blocksPerStep;
     private final int requiredPlayerDistanceChunks;
+    private final int grassPriorityAttemptsPerStep;
+    private final int grassFrontierRadius;
     private final int grassSpreadChancePercent;
     private final int plantGrowChancePercent;
     private final int flowerChancePercent;
@@ -38,6 +40,8 @@ final class MeadowGrowthConfig {
             int attemptsPerStep,
             int blocksPerStep,
             int requiredPlayerDistanceChunks,
+            int grassPriorityAttemptsPerStep,
+            int grassFrontierRadius,
             int grassSpreadChancePercent,
             int plantGrowChancePercent,
             int flowerChancePercent,
@@ -59,6 +63,8 @@ final class MeadowGrowthConfig {
         this.attemptsPerStep = attemptsPerStep;
         this.blocksPerStep = blocksPerStep;
         this.requiredPlayerDistanceChunks = requiredPlayerDistanceChunks;
+        this.grassPriorityAttemptsPerStep = grassPriorityAttemptsPerStep;
+        this.grassFrontierRadius = grassFrontierRadius;
         this.grassSpreadChancePercent = grassSpreadChancePercent;
         this.plantGrowChancePercent = plantGrowChancePercent;
         this.flowerChancePercent = flowerChancePercent;
@@ -89,7 +95,9 @@ final class MeadowGrowthConfig {
                 Math.max(1, config.getInt("meadow-growth.attempts-per-step", 32)),
                 Math.max(1, config.getInt("meadow-growth.blocks-per-step", 2)),
                 Math.max(0, config.getInt("meadow-growth.required-player-distance-chunks", 6)),
-                percent(config.getInt("meadow-growth.grass-spread-chance-percent", 75)),
+                Math.max(0, config.getInt("meadow-growth.grass-priority-attempts-per-step", 12)),
+                Math.max(1, Math.min(6, config.getInt("meadow-growth.grass-frontier-radius", 3))),
+                percent(config.getInt("meadow-growth.grass-spread-chance-percent", 90)),
                 percent(config.getInt("meadow-growth.plant-grow-chance-percent", 50)),
                 percent(config.getInt("meadow-growth.flower-chance-percent", 16)),
                 percent(config.getInt("meadow-growth.height-growth-chance-percent", 35)),
@@ -136,6 +144,14 @@ final class MeadowGrowthConfig {
         return requiredPlayerDistanceChunks;
     }
 
+    int grassPriorityAttemptsPerStep() {
+        return grassPriorityAttemptsPerStep;
+    }
+
+    int grassFrontierRadius() {
+        return grassFrontierRadius;
+    }
+
     int grassSpreadChancePercent() {
         return grassSpreadChancePercent;
     }
@@ -174,6 +190,8 @@ final class MeadowGrowthConfig {
                 + ", radius=" + searchRadius
                 + ", attempts=" + attemptsPerStep
                 + ", blocks=" + blocksPerStep
+                + ", grass-priority-attempts=" + grassPriorityAttemptsPerStep
+                + ", grass-frontier-radius=" + grassFrontierRadius
                 + ", grass=" + grassSpreadChancePercent
                 + ", plants=" + plantGrowChancePercent
                 + ", flowers=" + flowerChancePercent
