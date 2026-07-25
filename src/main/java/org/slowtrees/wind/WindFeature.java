@@ -129,11 +129,19 @@ public final class WindFeature implements PluginFeature, Listener {
                 diagnostics.recordEvent(currentConfig, "wind-skip: player has no world");
                 sample.detail("missing-world");
             } else if (world.getEnvironment() == World.Environment.NORMAL) {
+                if (!currentConfig.leafParticlesEnabled()
+                        && !currentConfig.leafLitterEnabled()) {
+                    schedulePlayerWind(player, currentConfig.gustTickInterval());
+                    sample.detail("leaf-effects-disabled");
+                    return;
+                }
                 Optional<Block> canopy = findNearbyCanopy(playerLocation, currentConfig.treeSearchRadius());
                 plugin.pathDebug().trace(plugin, "wind", canopy.isPresent() ? "canopy.search.found" : "canopy.search.miss",
                         "near=" + format(playerLocation) + " radius=" + currentConfig.treeSearchRadius());
                 canopy.ifPresent(block -> {
-                    spawnLeafDrift(player, block, currentPattern, currentConfig);
+                    if (currentConfig.leafParticlesEnabled()) {
+                        spawnLeafDrift(player, block, currentPattern, currentConfig);
+                    }
                     maybePlaceLeafLitter(player, block, currentPattern, currentConfig);
                 });
                 sample.changedUnits(canopy.isPresent() ? 1L : 0L).detail("canopy=" + canopy.isPresent() + " near=" + format(playerLocation));
@@ -238,6 +246,11 @@ public final class WindFeature implements PluginFeature, Listener {
 
     private void maybePlaceLeafLitter(Player player, Block canopy, WindPattern currentPattern, WindConfig currentConfig) {
         try (ReportSample sample = plugin.resourceReporter().begin("wind", "action.maybe-place-litter")) {
+            if (!currentConfig.leafLitterEnabled()) {
+                nextLitterAttemptMillis.remove(player.getUniqueId());
+                sample.detail("disabled");
+                return;
+            }
             long now = System.currentTimeMillis();
             long nextAttempt = nextLitterAttemptMillis.getOrDefault(player.getUniqueId(), 0L);
             if (now < nextAttempt) {

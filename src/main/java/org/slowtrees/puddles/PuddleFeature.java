@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.Bukkit;
+import org.bukkit.HeightMap;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -167,6 +168,7 @@ public final class PuddleFeature implements PluginFeature, Listener {
             }
             Set<Puddle> puddles = puddlesByWorld.computeIfAbsent(worldId, ignored -> ConcurrentHashMap.newKeySet());
             int before = puddles.size();
+            retireRainRejectedPuddles(world, puddles, currentConfig);
             retireDistantPuddles(world, puddles, currentConfig);
 
             if (world.hasStorm()) {
@@ -335,6 +337,18 @@ public final class PuddleFeature implements PluginFeature, Listener {
         }
         int groundY = world.getHighestBlockYAt(x, z);
         int waterY = groundY + 1;
+        String rainRejection = rainRejection(world, x, waterY, z, currentConfig);
+        if (rainRejection != null) {
+            diagnostics.recordRejected();
+            String rainDetail = x + "," + waterY + "," + z
+                    + " biome=" + world.getBiome(x, waterY, z).getKey().getKey()
+                    + " temperature=" + world.getTemperature(x, waterY, z);
+            diagnostics.recordEvent(currentConfig,
+                    "[GATE][puddles] rain.reject." + rainRejection + " " + rainDetail);
+            plugin.pathDebug().traceSampled(plugin, "puddles",
+                    "rain.reject." + rainRejection, rainDetail);
+            return Optional.empty();
+        }
         if (parent != null && Math.abs(groundY - (parent.y() - 1)) > 1) {
             diagnostics.recordRejected();
             return Optional.empty();
@@ -353,6 +367,61 @@ public final class PuddleFeature implements PluginFeature, Listener {
         }
         int depth = random.nextDouble() < 0.15D ? 2 : 1;
         return Optional.of(new Puddle(worldId, x, waterY, z, depth));
+    }
+
+    private String rainRejection(
+            World world,
+            int x,
+            int y,
+            int z,
+            PuddleConfig currentConfig
+    ) {
+        boolean skyExposed = y > world.getHighestBlockYAt(
+                x, z, HeightMap.MOTION_BLOCKING);
+        return PuddleRainPolicy.rejection(
+                world.getBiome(x, y, z).getKey().getKey(),
+                world.getTemperature(x, y, z),
+                skyExposed,
+                currentConfig.requireRainCapableBiome(),
+                currentConfig.requireSkyExposure(),
+                currentConfig.allowSnowfall()
+        );
+    }
+
+    private void retireRainRejectedPuddles(
+            World world,
+            Set<Puddle> puddles,
+            PuddleConfig currentConfig
+    ) {
+        if (puddles.isEmpty()) {
+            return;
+        }
+        List<Puddle> retired = new ArrayList<>();
+        for (Puddle puddle : puddles) {
+            int chunkX = puddle.x() >> 4;
+            int chunkZ = puddle.z() >> 4;
+            if (!world.isChunkLoaded(chunkX, chunkZ)
+                    || !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ, 0)) {
+                continue;
+            }
+            String rejection = rainRejection(world, puddle.x(), puddle.y(),
+                    puddle.z(), currentConfig);
+            if (rejection != null) {
+                retired.add(puddle);
+            }
+        }
+        if (retired.isEmpty()) {
+            return;
+        }
+        puddles.removeAll(retired);
+        for (int index = 0; index < retired.size(); index++) {
+            diagnostics.recordDried();
+        }
+        diagnostics.recordEvent(currentConfig,
+                "[STATE][puddles] retired-non-rain=" + retired.size()
+                        + " ## dry, snowy, and covered columns cannot retain puddles");
+        plugin.pathDebug().traceSampled(plugin, "puddles",
+                "state.retire-non-rain", "removed=" + retired.size());
     }
 
     private Optional<Material> groundMaterial(World world, int x, int z) {

@@ -7,6 +7,8 @@ final class WindConfig {
     private final boolean enabled;
     private final long gustTickInterval;
     private final long patternChangeTicks;
+    private final boolean leafParticlesEnabled;
+    private final boolean leafLitterEnabled;
     private final long leafLitterPlacementTicks;
     private final int requiredPlayerDistanceChunks;
     private final int maxLeafLitterPerChunk;
@@ -25,6 +27,8 @@ final class WindConfig {
             boolean enabled,
             long gustTickInterval,
             long patternChangeTicks,
+            boolean leafParticlesEnabled,
+            boolean leafLitterEnabled,
             long leafLitterPlacementTicks,
             int requiredPlayerDistanceChunks,
             int maxLeafLitterPerChunk,
@@ -42,6 +46,8 @@ final class WindConfig {
         this.enabled = enabled;
         this.gustTickInterval = gustTickInterval;
         this.patternChangeTicks = patternChangeTicks;
+        this.leafParticlesEnabled = leafParticlesEnabled;
+        this.leafLitterEnabled = leafLitterEnabled;
         this.leafLitterPlacementTicks = leafLitterPlacementTicks;
         this.requiredPlayerDistanceChunks = requiredPlayerDistanceChunks;
         this.maxLeafLitterPerChunk = maxLeafLitterPerChunk;
@@ -63,6 +69,8 @@ final class WindConfig {
                 config.getBoolean("wind.enabled", true),
                 Math.max(5L, config.getLong("wind.gust-tick-interval", 8L)),
                 Math.max(100L, config.getLong("wind.pattern-change-ticks", 6000L)),
+                config.getBoolean("wind.leaf-particles.enabled", true),
+                config.getBoolean("wind.leaf-litter.enabled", true),
                 Math.max(20L, config.getLong("wind.leaf-litter.placement-step-ticks", 80L)),
                 Math.max(0, config.getInt("wind.required-player-distance-chunks", 6)),
                 Math.max(0, config.getInt("wind.leaf-litter.max-per-chunk", 32)),
@@ -90,6 +98,14 @@ final class WindConfig {
 
     long patternChangeTicks() {
         return patternChangeTicks;
+    }
+
+    boolean leafParticlesEnabled() {
+        return leafParticlesEnabled;
+    }
+
+    boolean leafLitterEnabled() {
+        return leafLitterEnabled;
     }
 
     long leafLitterPlacementTicks() {
@@ -146,6 +162,8 @@ final class WindConfig {
                 + ", pattern-change=" + patternChangeTicks
                 + ", tree-radius=" + treeSearchRadius
                 + ", player-distance-chunks=" + requiredPlayerDistanceChunks
+                + ", leaf-particles-enabled=" + leafParticlesEnabled
+                + ", litter-enabled=" + leafLitterEnabled
                 + ", litter-step=" + leafLitterPlacementTicks
                 + ", litter-attempts=" + placementAttempts
                 + ", litter-max-per-chunk=" + maxLeafLitterPerChunk

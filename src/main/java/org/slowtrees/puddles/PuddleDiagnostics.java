@@ -125,6 +125,12 @@ final class PuddleDiagnostics {
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("session-started-at", sessionStartedAt);
         yaml.set("enabled", config.enabled());
+        yaml.set("rain-restrictions.require-rain-capable-biome",
+                config.requireRainCapableBiome());
+        yaml.set("rain-restrictions.require-sky-exposure",
+                config.requireSkyExposure());
+        yaml.set("rain-restrictions.allow-snowfall",
+                config.allowSnowfall());
         yaml.set("step-ticks", config.stepTicks());
         yaml.set("radius", config.radius());
         yaml.set("max-puddles-per-world", config.maxPuddlesPerWorld());

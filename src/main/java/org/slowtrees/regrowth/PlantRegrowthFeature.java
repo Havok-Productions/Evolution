@@ -57,6 +57,8 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     @Override
     public void onDisable() {
+        activeRegrowth.clear();
+        activeBlockKeys.clear();
         activeDecay.clear();
         diagnostics.saveNow(plugin);
         saveQueuedRegrowth();
@@ -64,13 +66,27 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
 
     @Override
     public void reload() {
-        this.config = PlantRegrowthConfig.load(plugin);
+        PlantRegrowthConfig previousConfig = this.config;
+        PlantRegrowthConfig reloadedConfig = PlantRegrowthConfig.load(plugin);
+        this.config = reloadedConfig;
+        if (previousConfig.enabled() && !reloadedConfig.enabled()) {
+            activeRegrowth.clear();
+            activeBlockKeys.clear();
+            activeDecay.clear();
+            plugin.pathDebug().trace(plugin, "regrowth", "config.disabled",
+                    "paused queued structures=" + pendingRegrowth.size());
+        } else if (!previousConfig.enabled() && reloadedConfig.enabled()) {
+            pendingRegrowth.values().forEach(pending -> scheduleAttempt(pending, 1L));
+            plugin.pathDebug().trace(plugin, "regrowth", "config.enabled",
+                    "resumed queued structures=" + pendingRegrowth.size());
+        }
         plugin.pathDebug().trace(plugin, "regrowth", "config.reload", config.summary());
     }
 
     @Override
     public String status() {
-        return "Plant regrowth has " + pendingRegrowth.size() + " queued structure(s), "
+        return "Plant regrowth is " + (config.enabled() ? "enabled" : "disabled") + " with "
+                + pendingRegrowth.size() + " queued structure(s), "
                 + activeRegrowth.size() + " actively growing, "
                 + activeDecay.size() + " decaying plant(s).";
     }
@@ -92,6 +108,10 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         try (ReportSample sample = plugin.resourceReporter().begin("regrowth", "event.block-break")) {
             Block block = event.getBlock();
             PlantRegrowthConfig currentConfig = config;
+            if (!currentConfig.enabled()) {
+                sample.detail("feature-disabled " + block.getType());
+                return;
+            }
             if (!currentConfig.isWorldAllowed(block.getWorld())) {
                 plugin.pathDebug().trace(plugin, "regrowth", "break.skip.world-disabled", format(block.getLocation()));
                 sample.detail("world-disabled " + block.getType());
@@ -237,7 +257,8 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     }
 
     private void schedulePlantDecay(Block baseBlock, PlantRegrowthConfig currentConfig) {
-        if (!currentConfig.plantDecayEnabled() || !isDecayMaterial(baseBlock.getType())) {
+        if (!currentConfig.enabled() || !currentConfig.plantDecayEnabled()
+                || !isDecayMaterial(baseBlock.getType())) {
             plugin.pathDebug().trace(plugin, "regrowth", "decay.skip-disabled-or-invalid", baseBlock.getType() + " at " + format(baseBlock.getLocation()));
             return;
         }
@@ -299,7 +320,8 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
         try (ReportSample sample = plugin.resourceReporter().begin("regrowth", "tick.plant-decay")) {
             PlantRegrowthConfig currentConfig = config;
             World world = location.getWorld();
-            if (world == null || !currentConfig.plantDecayEnabled()) {
+            if (world == null || !currentConfig.enabled()
+                    || !currentConfig.plantDecayEnabled()) {
                 plugin.pathDebug().trace(plugin, "regrowth", "decay.cancel", "world missing or disabled");
                 activeDecay.remove(key, plan);
                 sample.detail("world-missing-or-disabled");
@@ -456,8 +478,11 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             try {
                 PendingRegrowth pending = PendingRegrowth.from(section);
                 pendingRegrowth.put(pending.key(), pending);
-                plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay", "loaded-regrowth retry=" + config.retryDelayTicks());
-                scheduleAttempt(pending, config.retryDelayTicks());
+                if (config.enabled()) {
+                    plugin.pathDebug().trace(plugin, "regrowth", "scheduler.region-delay",
+                            "loaded-regrowth retry=" + config.retryDelayTicks());
+                    scheduleAttempt(pending, config.retryDelayTicks());
+                }
             } catch (RuntimeException ex) {
                 plugin.pathDebug().failure(plugin, "regrowth", "persistence-invalid-entry", "queued-regrowth.yml entry skipped");
                 plugin.getLogger().warning("Skipping invalid queued plant regrowth entry '" + key + "': " + ex.getMessage());
@@ -514,6 +539,16 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
     private void attemptRegrowth(PendingRegrowth pending) {
         try (ReportSample sample = plugin.resourceReporter().begin("regrowth", "tick.attempt-regrowth")) {
             PlantRegrowthConfig currentConfig = config;
+            if (!currentConfig.enabled()) {
+                plugin.pathDebug().trace(plugin, "regrowth", "attempt.pause.disabled",
+                        pending.treeType() + " at " + format(pending));
+                sample.detail("feature-disabled " + pending.treeType());
+                return;
+            }
+            if (activeRegrowth.containsKey(pending.key())) {
+                sample.detail("already-active " + pending.treeType());
+                return;
+            }
             World world = pending.world();
             if (world == null || !currentConfig.isWorldAllowed(world)) {
                 plugin.pathDebug().trace(plugin, "regrowth", "attempt.remove-world-disabled", pending.treeType().name());
@@ -548,7 +583,10 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
             }
 
             ActiveRegrowth active = new ActiveRegrowth(pending, plannedBlocks);
-            activeRegrowth.put(pending.key(), active);
+            if (activeRegrowth.putIfAbsent(pending.key(), active) != null) {
+                sample.detail("already-active-after-plan " + pending.treeType());
+                return;
+            }
             plugin.pathDebug().trace(plugin, "regrowth", "attempt.active-start", pending.treeType() + " blocks=" + plannedBlocks.size());
             sample.workUnits(plannedBlocks.size()).changedUnits(1).detail("active-start " + pending.treeType() + " blocks=" + plannedBlocks.size());
             placeNextBatch(active);
@@ -587,6 +625,15 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
                 return;
             }
 
+            PlantRegrowthConfig currentConfig = config;
+            if (!currentConfig.enabled()) {
+                unregisterActiveRegrowth(pending.key());
+                plugin.pathDebug().trace(plugin, "regrowth", "place.pause.disabled",
+                        pending.treeType() + " at " + format(pending));
+                sample.detail("feature-disabled " + pending.treeType());
+                return;
+            }
+
             World world = pending.world();
             if (world == null) {
                 removeRegrowth(pending);
@@ -594,7 +641,6 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
                 return;
             }
 
-            PlantRegrowthConfig currentConfig = config;
             Location location = pending.location(world);
             long remainingCooldownTicks = active.remainingCooldownTicks();
             if (remainingCooldownTicks > 0L) {

@@ -12,6 +12,9 @@ import org.slowtrees.core.SlowTreesPlugin;
 
 final class PuddleConfig {
     private final boolean enabled;
+    private final boolean requireRainCapableBiome;
+    private final boolean requireSkyExposure;
+    private final boolean allowSnowfall;
     private final long stepTicks;
     private final int radius;
     private final int maxPuddlesPerWorld;
@@ -41,6 +44,9 @@ final class PuddleConfig {
 
     private PuddleConfig(
             boolean enabled,
+            boolean requireRainCapableBiome,
+            boolean requireSkyExposure,
+            boolean allowSnowfall,
             long stepTicks,
             int radius,
             int maxPuddlesPerWorld,
@@ -69,6 +75,9 @@ final class PuddleConfig {
             Set<String> disabledWorlds
     ) {
         this.enabled = enabled;
+        this.requireRainCapableBiome = requireRainCapableBiome;
+        this.requireSkyExposure = requireSkyExposure;
+        this.allowSnowfall = allowSnowfall;
         this.stepTicks = stepTicks;
         this.radius = radius;
         this.maxPuddlesPerWorld = maxPuddlesPerWorld;
@@ -102,6 +111,9 @@ final class PuddleConfig {
         boolean testing = RuntimeProfile.testingEnabled(config) && config.getBoolean("puddles.testing.enabled", true);
         return new PuddleConfig(
                 config.getBoolean("puddles.enabled", true),
+                config.getBoolean("puddles.rain-restrictions.require-rain-capable-biome", true),
+                config.getBoolean("puddles.rain-restrictions.require-sky-exposure", true),
+                config.getBoolean("puddles.rain-restrictions.allow-snowfall", false),
                 Math.max(5L, config.getLong("puddles.step-ticks", 20L)),
                 Math.max(4, config.getInt("puddles.radius", 32)),
                 Math.max(0, config.getInt("puddles.max-puddles-per-world", 300)),
@@ -135,6 +147,18 @@ final class PuddleConfig {
 
     boolean enabled() {
         return enabled;
+    }
+
+    boolean requireRainCapableBiome() {
+        return requireRainCapableBiome;
+    }
+
+    boolean requireSkyExposure() {
+        return requireSkyExposure;
+    }
+
+    boolean allowSnowfall() {
+        return allowSnowfall;
     }
 
     long stepTicks() {
@@ -227,6 +251,9 @@ final class PuddleConfig {
 
     String summary() {
         return "enabled=" + enabled
+                + ", rain-biome=" + requireRainCapableBiome
+                + ", sky-exposure=" + requireSkyExposure
+                + ", snowfall=" + allowSnowfall
                 + ", step=" + stepTicks()
                 + ", radius=" + radius
                 + ", max-world=" + maxPuddlesPerWorld

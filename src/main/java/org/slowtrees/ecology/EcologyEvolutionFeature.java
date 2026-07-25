@@ -446,6 +446,11 @@ public final class EcologyEvolutionFeature implements PluginFeature, Listener {
 
     private boolean placeBamboo(EcologyTarget origin, String action,
             EcologyEvolutionConfig currentConfig) {
+        if (!currentConfig.bambooEnabled()) {
+            diagnostics.recordRejectSampled(currentConfig, "bamboo-disabled",
+                    targetContext(origin));
+            return false;
+        }
         if (origin.path() != BiomeEcologyPath.TROPICAL) {
             diagnostics.recordRejectSampled(currentConfig, "bamboo-biome",
                     targetContext(origin));

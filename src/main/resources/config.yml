@@ -1,3 +1,15 @@
+# ## FEATURE SWITCH INDEX
+# Every gameplay system can be enabled or disabled independently beside its
+# own settings: plant-regrowth, plant-decay, meadow-growth, ecology-evolution,
+# ecology-evolution.bamboo, tree-evolution, tree-evolution.reproduction,
+# shaped-portals, nether-corruption, wind, wind.leaf-particles,
+# wind.leaf-litter, puddles, and waves.
+# Reload with /evolution reload after changing a switch.
+
+# Slow vanilla tree and mushroom replacement after part of a plant is broken.
+plant-regrowth:
+  enabled: true
+
 # Default: 30 seconds at 20 TPS before the first replacement block appears.
 initial-delay-ticks: 600
 
@@ -167,6 +179,8 @@ ecology-evolution:
   rare-feature-chance-percent: 5
   max-details-per-area: 36
   bamboo:
+    # ## Disables jungle bamboo placement/spread without disabling ecology.
+    enabled: true
     # ## Bamboo rolls near an existing jungle stalk grow the connected patch.
     # The radius is clamped to 1-8 so scans remain bounded on Folia regions.
     spread-radius: 5
@@ -446,6 +460,9 @@ wind:
   pattern-change-ticks: 6000
   tree-search-radius: 32
   required-player-distance-chunks: 6
+  leaf-particles:
+    # ## Visible falling leaves can be disabled without disabling wind/litter.
+    enabled: true
   particles:
     clear-count: 16
     rain-count: 8
@@ -455,6 +472,8 @@ wind:
     rain-drift-radius: 4
     storm-drift-radius: 16
   leaf-litter:
+    # ## Disables ground litter while keeping visible wind particles active.
+    enabled: true
     placement-step-ticks: 80
     placement-attempts: 48
     # Prevents endless leaf carpet buildup. Set to 0 to remove the cap.
@@ -470,6 +489,12 @@ wind:
 # ## Seed, expansion, drying, render, and safety gates write to puddles.debug.yml.
 puddles:
   enabled: true
+  rain-restrictions:
+    # ## Puddles need actual rain at the sampled column, not merely a world storm.
+    require-rain-capable-biome: true
+    require-sky-exposure: true
+    # Snow does not produce liquid puddles by default.
+    allow-snowfall: false
   step-ticks: 20
   radius: 32
   max-puddles-per-world: 300

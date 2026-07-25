@@ -17,6 +17,7 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.slowtrees.core.SlowTreesPlugin;
 
 final class PlantRegrowthConfig {
+    private final boolean enabled;
     private final long initialDelayTicks;
     private final long growthStepTicks;
     private final int blocksPerGrowthStep;
@@ -41,6 +42,7 @@ final class PlantRegrowthConfig {
     private final Map<Material, TreeType> mushroomTypes;
 
     private PlantRegrowthConfig(
+            boolean enabled,
             long initialDelayTicks,
             long growthStepTicks,
             int blocksPerGrowthStep,
@@ -64,6 +66,7 @@ final class PlantRegrowthConfig {
             Map<Material, TreeType> treeTypes,
             Map<Material, TreeType> mushroomTypes
     ) {
+        this.enabled = enabled;
         this.initialDelayTicks = initialDelayTicks;
         this.growthStepTicks = growthStepTicks;
         this.blocksPerGrowthStep = blocksPerGrowthStep;
@@ -110,6 +113,7 @@ final class PlantRegrowthConfig {
         }
 
         return new PlantRegrowthConfig(
+                config.getBoolean("plant-regrowth.enabled", true),
                 Math.max(1L, config.getLong("initial-delay-ticks", 20L)),
                 Math.max(1L, config.getLong("growth-step-ticks", 600L)),
                 Math.max(1, config.getInt("blocks-per-growth-step", 1)),
@@ -135,6 +139,10 @@ final class PlantRegrowthConfig {
                 Collections.unmodifiableMap(new HashMap<>(treeTypes)),
                 Collections.unmodifiableMap(new HashMap<>(mushroomTypes))
         );
+    }
+
+    boolean enabled() {
+        return enabled;
     }
 
     Optional<TreeType> treeTypeFor(Material material) {
@@ -225,7 +233,8 @@ final class PlantRegrowthConfig {
     }
 
     String summary() {
-        return "initial-delay=" + initialDelayTicks
+        return "enabled=" + enabled
+                + ", initial-delay=" + initialDelayTicks
                 + ", growth-step=" + growthStepTicks()
                 + ", blocks-per-step=" + blocksPerGrowthStep
                 + ", world-health=" + worldHealthModeEnabled
