@@ -385,7 +385,7 @@ def write_obj(block_sets: list[tuple[str, dict[tuple[int, int, int], str], tuple
     mtl_path = path.with_suffix(".mtl")
     material_names = sorted(COLORS)
     with mtl_path.open("w", encoding="utf-8") as mtl:
-        mtl.write("## SlowTrees staged concept material palette\n")
+        mtl.write("## Evolution staged concept material palette\n")
         for name in material_names:
             r, g, b = COLORS[name]
             mtl.write(f"newmtl {name}\nKd {r / 255:.4f} {g / 255:.4f} {b / 255:.4f}\nKa 0.1 0.1 0.1\n\n")
@@ -420,7 +420,7 @@ def write_obj(block_sets: list[tuple[str, dict[tuple[int, int, int], str], tuple
                 faces.append((mat, tuple(index_map[p] for p in face)))
 
     with path.open("w", encoding="utf-8") as obj:
-        obj.write("## SlowTrees staged tree concept OBJ. Original procedural reference shapes.\n")
+        obj.write("## Evolution staged tree concept OBJ. Original procedural reference shapes.\n")
         obj.write(f"mtllib {mtl_path.name}\n")
         for v in vertices:
             obj.write(f"v {v[0]} {v[1]} {v[2]}\n")
@@ -512,7 +512,7 @@ def main() -> None:
 
     readme = OUT / "README.md"
     readme.write_text(
-        "## SlowTrees staged tree models\n"
+        "## Evolution staged tree models\n"
         "These PNG and OBJ files show SMALL, MEDIUM, MATURE, and ANCIENT concept shapes for each species.\n"
         "They are original procedural reference models for tuning TreeEvolutionFeature and TreeSpeciesStageStyle.\n\n"
         "- png/all_species_stage_gallery.png: full visual growth ladder.\n"

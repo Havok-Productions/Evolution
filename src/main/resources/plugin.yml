@@ -1,6 +1,6 @@
 name: Evolution
 version: ${project.version}
-main: org.slowtrees.core.SlowTreesPlugin
+main: org.evolution.coreparts.EvolutionPlugin
 api-version: '26.1.2'
 folia-supported: true
 softdepend: [WorldGuard]
@@ -9,14 +9,8 @@ commands:
   evolution:
     description: Manage Evolution.
     usage: /evolution <reload|status|pending|tree>
-    aliases: [slowtrees]
     permission: evolution.admin
 permissions:
   evolution.admin:
     description: Allows Evolution administration commands.
     default: op
-  slowtrees.admin:
-    description: Legacy alias for Evolution administration commands.
-    default: op
-    children:
-      evolution.admin: true

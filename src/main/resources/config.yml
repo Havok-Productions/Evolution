@@ -233,6 +233,8 @@ tree-evolution:
       # ## Testing stage gates. Age increases when this tree places/prunes one
       # block. Placement stays one block at a time so fast testing does not
       # skip the same physical steps survival growth would take.
+      # ## Age only makes a stage eligible. It cannot end the stage until its
+      # projected trunk, branches, canopy, and transition cleanup are complete.
       small-to-medium-age: 4
       medium-to-mature-age: 12
       mature-to-ancient-age: 36
