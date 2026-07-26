@@ -31,6 +31,15 @@ final class TreeFocusPolicy {
                         completion, budget, exposedUpperLogs, uncoveredBranchTips);
     }
 
+    static boolean transitionPending(int cleanupBurst, int growthBurst,
+            boolean stageComplete, boolean hasOriginalSnapshot) {
+        // ## The immutable source snapshot is the durable transition owner.
+        // Numeric bursts pace work; they must not release a half-reformed tree.
+        return cleanupBurst > 0
+                || (growthBurst > 0 && !stageComplete)
+                || hasOriginalSnapshot;
+    }
+
     static boolean readyForMaturity(boolean stageComplete,
             int cleanupBurst, int growthBurst, boolean hasOriginalSnapshot) {
         return stageComplete
@@ -40,9 +49,13 @@ final class TreeFocusPolicy {
     }
 
     static boolean shouldFinalizeTransition(boolean stageComplete,
-            int cleanupBurst, int growthBurst, boolean hasOriginalSnapshot) {
+            int cleanupBurst, int growthBurst, boolean hasOriginalSnapshot,
+            int unresolvedSourceLeaves) {
+        // ## Structural completion alone cannot erase source ownership. Every
+        // captured leaf must first be adopted into the target or retired.
         return stageComplete
                 && cleanupBurst <= 0
+                && unresolvedSourceLeaves <= 0
                 && (growthBurst > 0 || hasOriginalSnapshot);
     }
 

@@ -103,6 +103,20 @@ public final class TreeCanopyTransitionPolicySmokeTest {
         require(!restored.hasOriginalShapeSnapshot(),
                 "full structural completion must release the temporary source shape");
 
+        TreeDna completedRevisionFive = dna(
+                TreePersonality.BALANCED,
+                TreeDna.CURRENT_SHAPE_REVISION - 1);
+        TreeDnaNormalizer.NormalizedDna ownershipRecapture =
+                new TreeDnaNormalizer().normalize(
+                        completedRevisionFive,
+                        TreeMaturityStage.MEDIUM);
+        require(ownershipRecapture.changed()
+                        && ownershipRecapture.dna().stageCleanupBurst() > 0
+                        && ownershipRecapture.dna().stageGrowthBurst() > 0,
+                "revision-5 completed trees must reopen one ownership-aware transition");
+        require(!ownershipRecapture.dna().hasOriginalShapeSnapshot(),
+                "offline normalization must wait for a live Folia-owned candidate to capture source coordinates");
+
         System.out.println("Tree canopy transition policy smoke test passed: "
                 + "target-canopy-preserved=true planned-wood-cleared=true "
                 + "corridor=" + policy.corridorMinimumY() + ".."

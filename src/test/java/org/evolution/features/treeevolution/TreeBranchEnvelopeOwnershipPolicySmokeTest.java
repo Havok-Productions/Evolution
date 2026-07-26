@@ -29,6 +29,15 @@ public final class TreeBranchEnvelopeOwnershipPolicySmokeTest {
         require(!TreeBranchEnvelopeOwnershipPolicy.shouldReformOriginalLeaf(
                         false, true, false),
                 "Leaves outside the planned canopy must not be claimed by reform.");
+        require(!TreeBranchEnvelopeOwnershipPolicy.plannedCanopySatisfied(
+                        true, true, true, false),
+                "A matching untouched source leaf must not complete the new canopy.");
+        require(TreeBranchEnvelopeOwnershipPolicy.plannedCanopySatisfied(
+                        true, true, true, true),
+                "An explicitly reformed source leaf should complete its target.");
+        require(TreeBranchEnvelopeOwnershipPolicy.plannedCanopySatisfied(
+                        true, true, false, false),
+                "A non-source organic leaf may remain compatible without being claimed.");
 
         System.out.println(
                 "Tree branch-envelope ownership policy smoke test passed: "

@@ -20,6 +20,8 @@ public final class TreeTransitionLedgerSmokeTest {
                 "A current transition must enforce evolved-leaf ownership.");
         require(!captured.countsAsEvolvedLeaf(sourceLeaf),
                 "An original source leaf must not satisfy a new branch envelope.");
+        require(captured.unresolvedSourceLeafCount() == 2,
+                "Every captured source leaf starts unresolved.");
 
         TreeTransitionLedger reformed = captured.recordEvolvedLeaf(sourceLeaf);
         require(reformed.countsAsEvolvedLeaf(sourceLeaf),
@@ -48,7 +50,20 @@ public final class TreeTransitionLedgerSmokeTest {
         require(restored.countsAsEvolvedLeaf(sourceLeaf),
                 "Persisted reform ownership must survive reload.");
 
-        TreeTransitionLedger completed = restored.completeTransition();
+        String diagonalLeaf = "world:13:73:11";
+        TreeTransitionLedger expanded = restored.expandSource(
+                Set.of("world:10:68:10", "world:11:69:10"),
+                Set.of(sourceLeaf, evolvedLeaf, diagonalLeaf));
+        require(expanded.captureIsCurrent(),
+                "Expanded fancy-tree capture must use the current ownership version.");
+        require(expanded.sourceLeaves().contains(diagonalLeaf),
+                "Diagonal fancy-tree foliage must join the source snapshot.");
+        require(!expanded.sourceLeaves().contains(evolvedLeaf),
+                "Expansion must not redefine an evolved leaf as original.");
+        require(expanded.unresolvedSourceLeafCount() == 2,
+                "Only untouched source foliage should remain unresolved.");
+
+        TreeTransitionLedger completed = expanded.completeTransition();
         require(!completed.hasSnapshot(),
                 "Stage completion should close the original-shape snapshot.");
         require(completed.countsAsEvolvedLeaf(sourceLeaf)

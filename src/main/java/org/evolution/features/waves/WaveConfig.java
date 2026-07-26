@@ -38,6 +38,8 @@ final class WaveConfig {
     private final int shoreResponseDistance;
     private final int fetchDistance;
     private final double minimumShoreFacing;
+    // ## Per-player packet cap; shared world-front simulation is never viewer-limited.
+    private final int maximumIncomingFrontsPerCoastAreaPerPlayer;
     private final int shorelineRunupDistance;
     private final int runupAdvanceTicksPerBlock;
     private final int runupRetreatTicksPerBlock;
@@ -75,6 +77,7 @@ final class WaveConfig {
             int shoreResponseDistance,
             int fetchDistance,
             double minimumShoreFacing,
+            int maximumIncomingFrontsPerCoastAreaPerPlayer,
             int shorelineRunupDistance,
             int runupAdvanceTicksPerBlock,
             int runupRetreatTicksPerBlock,
@@ -111,6 +114,7 @@ final class WaveConfig {
         this.shoreResponseDistance = shoreResponseDistance;
         this.fetchDistance = fetchDistance;
         this.minimumShoreFacing = minimumShoreFacing;
+        this.maximumIncomingFrontsPerCoastAreaPerPlayer = maximumIncomingFrontsPerCoastAreaPerPlayer;
         this.shorelineRunupDistance = shorelineRunupDistance;
         this.runupAdvanceTicksPerBlock = runupAdvanceTicksPerBlock;
         this.runupRetreatTicksPerBlock = runupRetreatTicksPerBlock;
@@ -161,6 +165,11 @@ final class WaveConfig {
                 Math.max(1, config.getInt("waves.shoreline-response.distance", 16)),
                 Math.max(1, config.getInt("waves.shoreline-response.fetch-distance", 16)),
                 clamp(config.getDouble("waves.shoreline-response.minimum-facing", 0.20D), 0.0D, 0.95D),
+                Math.max(1, Math.min(8, config.getInt(
+                        "waves.shoreline-response.maximum-incoming-fronts-per-coast-area-per-player",
+                        config.getInt(
+                                "waves.shoreline-response.maximum-incoming-fronts-per-coast",
+                                3)))),
                 Math.max(1, config.getInt("waves.shoreline-runup.max-distance", 6)),
                 Math.max(1, config.getInt("waves.shoreline-runup.advance-ticks-per-block", 3)),
                 Math.max(1, config.getInt("waves.shoreline-runup.retreat-ticks-per-block", 5)),
@@ -199,6 +208,7 @@ final class WaveConfig {
     int shoreResponseDistance() { return shoreResponseDistance; }
     int fetchDistance() { return fetchDistance; }
     double minimumShoreFacing() { return minimumShoreFacing; }
+    int maximumIncomingFrontsPerCoastAreaPerPlayer() { return maximumIncomingFrontsPerCoastAreaPerPlayer; }
     int shorelineRunupDistance() { return shorelineRunupDistance; }
     int runupAdvanceTicksPerBlock() { return runupAdvanceTicksPerBlock; }
     int runupRetreatTicksPerBlock() { return runupRetreatTicksPerBlock; }
@@ -230,7 +240,8 @@ final class WaveConfig {
                 + ", packed=" + packedBlockUpdates + ", reassert=" + packetReassertIntervalTicks
                 + "/" + packetReassertBudget + ", sticky=" + stickyVisualTicks
                 + ", cache-ttl=" + surfaceCacheTtlTicks + ", shore-response=" + shoreResponseDistance
-                + ", fetch=" + fetchDistance + ", minimum-facing=" + minimumShoreFacing + ", runup=" + shorelineRunupEnabled
+                + ", fetch=" + fetchDistance + ", minimum-facing=" + minimumShoreFacing
+                + ", coast-area-view-cap=" + maximumIncomingFrontsPerCoastAreaPerPlayer + ", runup=" + shorelineRunupEnabled
                 + ", particles=" + particlesEnabled + ", boats=" + boatBobbingEnabled
                 + ", biome-filter=" + biomeFilterEnabled
                 + ", " + ovalSettings.summary() + ", testing=" + testingEnabled;

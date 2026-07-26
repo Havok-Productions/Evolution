@@ -56,7 +56,7 @@ public final class TravelingWaveLakeSmokeTest {
         for (long tick = 0L; tick <= 500L; tick += 5L) {
             TravelingWaveRegistry.Update update = registry.update(
                     playerId, worldId, 0, 0, tick, profile, OvalWaveSettings.defaults(),
-                    1.0D, 0.0D, gridRadius, gridRadius + 8, topology);
+                    1.0D, 0.0D, gridRadius, gridRadius + 8, 3, topology);
             if (tick > 0L) {
                 maximumReplenishment = Math.max(maximumReplenishment,
                         update.lifecycle().spawnedIds().size());

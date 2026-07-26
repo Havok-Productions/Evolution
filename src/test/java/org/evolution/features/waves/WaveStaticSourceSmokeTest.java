@@ -37,10 +37,10 @@ public final class WaveStaticSourceSmokeTest {
 
         TravelingWaveRegistry.Update first = registry.update(
                 firstPlayer, worldId, 0, 0, 0L, profile, OvalWaveSettings.defaults(),
-                1.0D, 0.0D, 100, radius, topology);
+                1.0D, 0.0D, 100, radius, 3, topology);
         TravelingWaveRegistry.Update second = registry.update(
                 secondPlayer, worldId, 12, -8, 0L, profile, OvalWaveSettings.defaults(),
-                1.0D, 0.0D, 100, radius, topology);
+                1.0D, 0.0D, 100, radius, 3, topology);
         require(first.sources().activeSources() > 0,
                 "a known body of water must resolve a world-fixed source");
         require(first.sources().anchors().equals(second.sources().anchors()),
@@ -50,17 +50,17 @@ public final class WaveStaticSourceSmokeTest {
 
         TravelingWaveRegistry.Update movedFirst = registry.update(
                 firstPlayer, worldId, 28, 14, 20L, profile, OvalWaveSettings.defaults(),
-                1.0D, 0.0D, 100, radius, topology);
+                1.0D, 0.0D, 100, radius, 3, topology);
         TravelingWaveRegistry.Update movedSecond = registry.update(
                 secondPlayer, worldId, 12, -8, 20L, profile, OvalWaveSettings.defaults(),
-                1.0D, 0.0D, 100, radius, topology);
+                1.0D, 0.0D, 100, radius, 3, topology);
         require(signatures(movedFirst.fronts()).equals(signatures(movedSecond.fronts())),
                 "moving a player must not move, reseed, or double-advance shared fronts");
 
         registry.remove(firstPlayer);
         TravelingWaveRegistry.Update afterLeave = registry.update(
                 secondPlayer, worldId, 12, -8, 25L, profile, OvalWaveSettings.defaults(),
-                1.0D, 0.0D, 100, radius, topology);
+                1.0D, 0.0D, 100, radius, 3, topology);
         require(ids(movedSecond.fronts()).equals(ids(afterLeave.fronts())),
                 "one viewer leaving must not delete the world's source state");
 

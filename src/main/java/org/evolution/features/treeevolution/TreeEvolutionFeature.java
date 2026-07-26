@@ -635,13 +635,18 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         BranchTipCoverage branchTips = branchTipCoverage(candidate, dna, plan);
         boolean stageComplete = TreeFocusPolicy.stageStructureComplete(
                 completion, budget, exposedUpperLogs, branchTips.uncoveredTips());
-        boolean transitionPending = dna.stageCleanupBurst() > 0
-                || (dna.stageGrowthBurst() > 0 && !stageComplete);
+        boolean transitionPending = TreeFocusPolicy.transitionPending(
+                dna.stageCleanupBurst(), dna.stageGrowthBurst(),
+                stageComplete, dna.hasOriginalShapeSnapshot());
         return new TreeWorkStatus(
                 TreeFocusPolicy.needsFocus(
                         transitionPending, completion, budget,
                         exposedUpperLogs, branchTips.uncoveredTips()),
                 stageComplete,
+                transitionPending,
+                dna.hasOriginalShapeSnapshot(),
+                dna.originalShapeBlockCount(),
+                dna.unresolvedOriginalShapeLeafCount(),
                 completion,
                 budget,
                 exposedUpperLogs,
@@ -653,7 +658,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             TreeWorkStatus status, TreeEvolutionConfig currentConfig) {
         if (!TreeFocusPolicy.shouldFinalizeTransition(
                 status.stageComplete(), dna.stageCleanupBurst(),
-                dna.stageGrowthBurst(), dna.hasOriginalShapeSnapshot())) {
+                dna.stageGrowthBurst(), dna.hasOriginalShapeSnapshot(),
+                status.unresolvedSourceLeaves())) {
             return false;
         }
         int previousBurst = dna.stageGrowthBurst();
@@ -714,13 +720,18 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 sample.detail("work-gate " + dna.key());
                 return false;
             }
-            if (!dna.hasOriginalShapeSnapshot()
-                    && (dna.age() == 0 || dna.hasStageBurst())
+            boolean sourceCaptureRequired =
+                    (!dna.hasOriginalShapeSnapshot()
+                            && (dna.age() == 0 || dna.hasStageBurst()))
+                    || (dna.hasOriginalShapeSnapshot()
+                            && !dna.originalShapeCaptureIsCurrent());
+            if (sourceCaptureRequired
                     && !ensureOriginalShapeSnapshot(candidate, dna,
                             "before-world-change")) {
                 sample.detail("original-shape-wait " + dna.key());
                 return false;
             }
+            reconcileStageWithSourceHeight(candidate, dna, currentConfig);
 
         // ## TREE CONSTRUCTOR CORE
         // The feature gathers one immutable live snapshot, the hierarchy selects one
@@ -728,6 +739,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         Biome biome = candidate.baseBlock().getBiome();
         CachedTreePlan cachedPlan = cachedPlan(
                 dna, biome, currentConfig.rootsEnabled());
+        reconcileSourceLeafLedger(candidate, dna, cachedPlan);
         TreeGrowthIntent requestedIntent = refreshIntent(
                 candidate, dna, currentConfig);
         diagnostics.recordPlan(currentConfig, dna, cachedPlan.plan(),
@@ -775,7 +787,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 requestedIntent, constructorExposedLogs,
                 constructorBranchTips.uncoveredTips(),
                 transitionBlocker.isPresent(), broadCleanupReady,
-                !retiredCrown.isEmpty());
+                dna.unresolvedOriginalShapeLeafCount() > 0);
         plugin.pathDebug().traceSampled(
                 plugin, "tree-evolution",
                 construction.finalAudit().passed()
@@ -958,7 +970,15 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     ) {
         if (retiredCrown.isEmpty()) {
             diagnostics.recordReject(currentConfig,
-                    "constructor-retired-crown-empty", dna.key());
+                    "constructor-retired-crown-empty",
+                    dna.key() + " unresolved-source-leaves="
+                            + dna.unresolvedOriginalShapeLeafCount());
+            plugin.pathDebug().traceSampled(plugin, "tree-evolution",
+                    "gate.source-leaf-unresolved",
+                    "tree=" + dna.key()
+                            + " unresolved="
+                            + dna.unresolvedOriginalShapeLeafCount()
+                            + " ## the source snapshot remains open; no unresolved leaf may be forgotten by transition finalization");
             return TreeConstructionResult.idle(
                     "constructor.retired-crown-empty " + dna.key());
         }
@@ -1240,9 +1260,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 continue;
             }
             Block target = targetBlockFor(candidate.world(), plannedBlock);
-            if (target.getType() == plannedBlock.material()
-                    || isCompatibleOrganicOccupant(
-                            plannedBlock.role(), target.getType())) {
+            if (isSatisfiedPlannedBlock(dna, plannedBlock, target)) {
                 continue;
             }
             if (!isDependencyReady(candidate, dna, target, plannedBlock, intent, currentConfig, dependencyWaits < 8)) {
@@ -1437,6 +1455,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         int firstRequiredContacts = 0;
         int firstCurrentCluster = 0;
         int firstRequiredCluster = 0;
+        boolean firstNaturalVolume = true;
         for (TreeBranchPlan branch : cachedPlan.plan().branchPlans()) {
             TreeBranchPlan.BranchTip tip = branch.tip();
             String key = tip.x() + ":" + tip.y() + ":" + tip.z();
@@ -1462,8 +1481,12 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             int currentCluster = plannedEnvelopeLiveLeaves(
                     world, dna, tipBlock, dna.species().leafMaterial(),
                     cachedPlan.blocksByKey());
+            boolean naturalVolume = hasNaturalLiveEnvelope(
+                    world, dna, tipBlock, dna.species().leafMaterial(),
+                    cachedPlan.blocksByKey());
             if (currentContacts >= requiredContacts
-                    && currentCluster >= requiredCluster) {
+                    && currentCluster >= requiredCluster
+                    && naturalVolume) {
                 continue;
             }
             uncoveredPlannedTips++;
@@ -1473,6 +1496,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 firstRequiredContacts = requiredContacts;
                 firstCurrentCluster = currentCluster;
                 firstRequiredCluster = requiredCluster;
+                firstNaturalVolume = naturalVolume;
             }
         }
 
@@ -1497,6 +1521,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                             + " first=" + format(firstVisibleProblem)
                             + " contacts=" + firstCurrentContacts + "/" + firstRequiredContacts
                             + " envelope=" + firstCurrentCluster + "/" + firstRequiredCluster
+                            + " natural-volume=" + firstNaturalVolume
                             + " ## actual terminal logs are audited alongside planned tips so stale protrusions cannot hide outside the target plan");
             if (uncoveredPlannedTips > 0) {
                 plugin.pathDebug().traceSampled(plugin, "tree-evolution",
@@ -1505,6 +1530,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                                 + " first=" + format(firstUncovered)
                                 + " owned-contacts=" + firstCurrentContacts + "/" + firstRequiredContacts
                                 + " owned-envelope=" + firstCurrentCluster + "/" + firstRequiredCluster
+                                + " natural-volume=" + firstNaturalVolume
                                 + " ownership-version=" + dna.evolutionOwnershipVersion()
                                 + " evolved-leaves=" + dna.evolvedLeafCount()
                                 + " ownership-required=" + dna.requiresEvolvedLeafOwnership()
@@ -1760,6 +1786,22 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     private int plannedEnvelopeLiveLeaves(
             World world, TreeDna dna, Block tip, Material leafMaterial,
             Map<String, PlannedTreeBlock> blocksByKey) {
+        return liveEnvelopeShape(
+                world, dna, tip, leafMaterial, blocksByKey).leaves();
+    }
+
+    private boolean hasNaturalLiveEnvelope(
+            World world, TreeDna dna, Block tip, Material leafMaterial,
+            Map<String, PlannedTreeBlock> blocksByKey) {
+        return TreeBranchTipIntegrityPolicy.hasNaturalVolume(
+                dna.maturityStage(), dna.species(),
+                tip.getX(), tip.getY(), tip.getZ(),
+                liveEnvelopeShape(world, dna, tip, leafMaterial, blocksByKey));
+    }
+
+    private TreeBranchTipIntegrityPolicy.EnvelopeShape liveEnvelopeShape(
+            World world, TreeDna dna, Block tip, Material leafMaterial,
+            Map<String, PlannedTreeBlock> blocksByKey) {
         ArrayDeque<Block> pending = new ArrayDeque<>();
         Set<String> visited = new HashSet<>();
         for (BlockFace face : NEIGHBORS) {
@@ -1768,9 +1810,21 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                     blocksByKey, pending, visited);
         }
         int leaves = 0;
+        int minX = tip.getX();
+        int maxX = tip.getX();
+        int minY = tip.getY();
+        int maxY = tip.getY();
+        int minZ = tip.getZ();
+        int maxZ = tip.getZ();
         while (!pending.isEmpty()) {
             Block current = pending.removeFirst();
             leaves++;
+            minX = Math.min(minX, current.getX());
+            maxX = Math.max(maxX, current.getX());
+            minY = Math.min(minY, current.getY());
+            maxY = Math.max(maxY, current.getY());
+            minZ = Math.min(minZ, current.getZ());
+            maxZ = Math.max(maxZ, current.getZ());
             for (BlockFace face : NEIGHBORS) {
                 Block next = current.getRelative(face);
                 if (Math.abs(next.getX() - tip.getX()) > 2
@@ -1783,7 +1837,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                         blocksByKey, pending, visited);
             }
         }
-        return leaves;
+        return new TreeBranchTipIntegrityPolicy.EnvelopeShape(
+                leaves, minX, maxX, minY, maxY, minZ, maxZ);
     }
 
     private void addLivePlannedLeaf(
@@ -1841,9 +1896,11 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                     ignored -> world.isChunkLoaded(chunkX, chunkZ)
                             && Bukkit.isOwnedByCurrentRegion(
                                     world, chunkX, chunkZ, 0));
-            Material live = readable
-                    ? world.getBlockAt(block.x(), block.y(), block.z()).getType()
-                    : Material.AIR;
+            Block liveBlock = readable
+                    ? world.getBlockAt(block.x(), block.y(), block.z())
+                    : null;
+            Material live = liveBlock == null
+                    ? Material.AIR : liveBlock.getType();
             BlockProvenance provenance = BlockProvenance.classify(
                     config, dna, block, live, true, readable);
             if (readable && (provenance == BlockProvenance.LIQUID
@@ -1853,9 +1910,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 continue;
             }
             boolean satisfied = readable
-                    && (live == block.material()
-                            || isCompatibleOrganicOccupant(
-                                    block.role(), live));
+                    && isSatisfiedPlannedBlock(dna, block, liveBlock);
             if (block.role() == TreeBlockRole.TRUNK
                     && trunkTotal < sampleLimitPerRole) {
                 trunkTotal++;
@@ -1885,6 +1940,25 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 trunkPlaced, trunkTotal,
                 branchPlaced, branchTotal,
                 canopyPlaced, canopyTotal);
+    }
+
+    private boolean isSatisfiedPlannedBlock(
+            TreeDna dna, PlannedTreeBlock planned, Block liveBlock) {
+        if (liveBlock == null) {
+            return false;
+        }
+        Material live = liveBlock.getType();
+        String blockKey = keyFor(liveBlock);
+        boolean materialMatches = live == planned.material();
+        boolean compatibleOrganic =
+                isCompatibleOrganicOccupant(planned.role(), live);
+        if (planned.role() == TreeBlockRole.CANOPY) {
+            return TreeBranchEnvelopeOwnershipPolicy.plannedCanopySatisfied(
+                    materialMatches, compatibleOrganic,
+                    dna.wasOriginalShapeLeaf(blockKey),
+                    dna.countsAsEvolvedLeaf(blockKey));
+        }
+        return materialMatches || compatibleOrganic;
     }
 
     private boolean isCompatibleOrganicOccupant(
@@ -2151,6 +2225,68 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         return true;
     }
 
+    private void reconcileSourceLeafLedger(
+            TreeCandidate candidate,
+            TreeDna dna,
+            CachedTreePlan cachedPlan
+    ) {
+        if (!dna.hasOriginalShapeSnapshot()) {
+            return;
+        }
+        int adopted = 0;
+        int absent = 0;
+        String firstUnresolved = null;
+        for (String sourceLeafKey : dna.originalShapeLeaves()) {
+            if (dna.retiredOriginalShapeLeaves().contains(sourceLeafKey)
+                    || dna.countsAsEvolvedLeaf(sourceLeafKey)) {
+                continue;
+            }
+            Optional<Block> sourceLeaf =
+                    blockFromKey(candidate.world(), sourceLeafKey);
+            if (sourceLeaf.isEmpty()) {
+                continue;
+            }
+            Block block = sourceLeaf.get();
+            if (!isReadableTreeCoordinate(
+                    candidate.world(), block.getX(), block.getZ())) {
+                continue;
+            }
+            if (block.getType() != dna.species().leafMaterial()) {
+                if (dna.markOriginalShapeLeafRetired(sourceLeafKey)) {
+                    absent++;
+                }
+                continue;
+            }
+            PlannedTreeBlock planned = cachedPlan.blocksByKey().get(
+                    block.getX() + ":" + block.getY() + ":" + block.getZ());
+            if (planned != null
+                    && planned.role() == TreeBlockRole.CANOPY
+                    && planned.material() == block.getType()
+                    && dna.markEvolvedLeaf(sourceLeafKey)) {
+                adopted++;
+                continue;
+            }
+            if (firstUnresolved == null) {
+                firstUnresolved = sourceLeafKey;
+            }
+        }
+        if (adopted <= 0 && absent <= 0) {
+            return;
+        }
+        markTreeDnaDirty("source leaf ledger reconcile " + dna.key());
+        projectionProgressCache.remove(dna.key());
+        plugin.pathDebug().trace(plugin, "tree-evolution",
+                "state.source-leaf-reconcile",
+                "tree=" + dna.key()
+                        + " adopted-target=" + adopted
+                        + " already-absent=" + absent
+                        + " unresolved="
+                        + dna.unresolvedOriginalShapeLeafCount()
+                        + (firstUnresolved == null
+                                ? ""
+                                : " first-unresolved=" + firstUnresolved)
+                        + " ## source evidence remains persisted until every original leaf is adopted or retired");
+    }
     private List<Block> findRetiredCanopyLeaves(
             TreeCandidate candidate,
             TreeDna dna,
@@ -2700,6 +2836,51 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         }
     }
 
+    private void reconcileStageWithSourceHeight(
+            TreeCandidate candidate,
+            TreeDna dna,
+            TreeEvolutionConfig currentConfig
+    ) {
+        if (!dna.hasOriginalShapeSnapshot()) {
+            return;
+        }
+        int observedHeight = Math.max(
+                candidate.height(),
+                liveTrunkHeight(candidate.world(), dna));
+        int advanced = 0;
+        while (TreeSourceStagePolicy.shouldAdvance(
+                dna.maturityStage(), currentConfig.maximumStage(),
+                observedHeight, TreeSpeciesStageStyle.visibleHeight(dna))) {
+            TreeMaturityStage before = dna.maturityStage();
+            int formerStageHeight = TreeSpeciesStageStyle.visibleHeight(dna);
+            if (!dna.advanceMaturity()) {
+                break;
+            }
+            advanced++;
+            diagnostics.recordStageTransition(
+                    currentConfig, dna, before, dna.maturityStage(),
+                    "source-height-reconcile observed=" + observedHeight
+                            + " former-stage-height=" + formerStageHeight
+                            + " ## an existing trunk cannot be forced backward into a shorter stage");
+        }
+        if (advanced <= 0) {
+            return;
+        }
+        projectionProgressCache.remove(dna.key());
+        liveTerminalAuditCache.remove(dna.key());
+        markTreeDnaDirty("source-height stage reconcile " + dna.key());
+        saveTreeDna();
+        plugin.pathDebug().trace(
+                plugin, "tree-evolution", "state.source-height-stage-reconcile",
+                "tree=" + dna.key()
+                        + " observed-height=" + observedHeight
+                        + " advanced=" + advanced
+                        + " stage=" + dna.maturityStage()
+                        + " planned-height="
+                        + TreeSpeciesStageStyle.visibleHeight(dna)
+                        + " ## source-size reconciliation runs before constructor routing");
+    }
+
     private void updateMaturity(TreeCandidate candidate, TreeDna dna, TreeEvolutionConfig currentConfig) {
         int current = Math.max(candidate.height(), liveTrunkHeight(candidate.world(), dna));
         TreeMaturityStage before = dna.maturityStage();
@@ -2808,13 +2989,15 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
 
     private boolean ensureOriginalShapeSnapshot(TreeCandidate candidate,
             TreeDna dna, String reason) {
-        if (dna.hasOriginalShapeSnapshot()) {
+        if (dna.hasOriginalShapeSnapshot()
+                && dna.originalShapeCaptureIsCurrent()) {
             return true;
         }
-        TreeCandidate source = candidate;
-        if (!source.ownershipComplete()) {
-            source = buildCandidate(candidate.baseBlock(), true).orElse(null);
-        }
+        // ## Snapshot ownership always uses the authoritative full-crown walk.
+        // A six-face candidate can be complete for scheduling while still missing
+        // diagonally attached foliage from a fancy vanilla tree.
+        TreeCandidate source =
+                buildCandidate(candidate.baseBlock(), true).orElse(null);
         if (source == null || !source.ownershipComplete()) {
             diagnostics.recordReject(config, "original-shape-incomplete",
                     dna.key() + " reason=" + reason);
@@ -2831,17 +3014,26 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                     dna.key() + " reason=" + reason);
             return false;
         }
-        dna.captureOriginalShape(logs, leaves);
+        boolean expanding = dna.hasOriginalShapeSnapshot();
+        if (expanding) {
+            dna.expandOriginalShape(logs, leaves);
+        } else {
+            dna.captureOriginalShape(logs, leaves);
+        }
         markTreeDnaDirty("original shape capture " + dna.key());
         saveTreeDna();
         plugin.pathDebug().trace(plugin, "tree-evolution",
-                "state.original-shape-capture",
+                expanding
+                        ? "state.original-shape-expand"
+                        : "state.original-shape-capture",
                 "tree=" + dna.key() + " blocks="
-                        + (logs.size() + leaves.size())
-                        + " logs=" + logs.size()
-                        + " leaves=" + leaves.size()
+                        + dna.originalShapeBlockCount()
+                        + " scan-logs=" + logs.size()
+                        + " scan-leaves=" + leaves.size()
+                        + " unresolved="
+                        + dna.unresolvedOriginalShapeLeafCount()
                         + " reason=" + reason
-                        + " ## exact source leaves remain authoritative until this structural stage completes");
+                        + " ## exact full-crown source leaves remain authoritative until target completion and pruning both pass");
         return true;
     }
 
@@ -3415,7 +3607,9 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         int currentCluster = plannedEnvelopeLiveLeaves(
                 candidate.world(), dna, tip, leafMaterial, blocksByKey);
         if (currentContacts >= requiredContacts
-                && currentCluster >= requiredCluster) {
+                && currentCluster >= requiredCluster
+                && hasNaturalLiveEnvelope(
+                        candidate.world(), dna, tip, leafMaterial, blocksByKey)) {
             return 0;
         }
 
@@ -3441,7 +3635,11 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
 
         int updatedCluster = plannedEnvelopeLiveLeaves(
                 candidate.world(), dna, tip, leafMaterial, blocksByKey);
-        if (placed < placementLimit && updatedCluster < requiredCluster) {
+        if (placed < placementLimit
+                && (updatedCluster < requiredCluster
+                        || !hasNaturalLiveEnvelope(
+                                candidate.world(), dna, tip,
+                                leafMaterial, blocksByKey))) {
             List<PlannedTreeBlock> envelope = new ArrayList<>();
             for (PlannedTreeBlock planned : blocksByKey.values()) {
                 if (planned.role() != TreeBlockRole.CANOPY
@@ -3453,13 +3651,16 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 }
                 envelope.add(planned);
             }
-            envelope.sort(Comparator.comparingInt(planned ->
-                    Math.abs(planned.x() - tip.getX())
-                            + Math.abs(planned.y() - tip.getY())
-                            + Math.abs(planned.z() - tip.getZ())));
+            envelope.sort(Comparator
+                    .comparingInt((PlannedTreeBlock planned) ->
+                            branchEnvelopePlacementPriority(tip, planned))
+                    .thenComparing(PlannedTreeBlock::key));
             for (PlannedTreeBlock planned : envelope) {
                 if (placed >= placementLimit
-                        || updatedCluster >= requiredCluster) {
+                        || (updatedCluster >= requiredCluster
+                                && hasNaturalLiveEnvelope(
+                                        candidate.world(), dna, tip,
+                                        leafMaterial, blocksByKey))) {
                     break;
                 }
                 Block leaf = candidate.world().getBlockAt(
@@ -3498,6 +3699,17 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         return placed;
     }
 
+    private int branchEnvelopePlacementPriority(
+            Block tip, PlannedTreeBlock planned) {
+        int dx = Math.abs(planned.x() - tip.getX());
+        int dy = Math.abs(planned.y() - tip.getY());
+        int dz = Math.abs(planned.z() - tip.getZ());
+        // ## Build vertical and side volume before filling the middle. This keeps
+        // a branch crown cloud-like throughout construction instead of flat first.
+        int volumeBias = dy > 0 ? -12 : 0;
+        int sideBias = dx > 0 && dz > 0 ? -4 : 0;
+        return volumeBias + sideBias + dx + dy + dz;
+    }
     private int coverExposedLog(TreeCandidate candidate, TreeDna dna,
             TreeEvolutionConfig currentConfig, Block trunk,
             Map<String, PlannedTreeBlock> blocksByKey) {
@@ -3516,7 +3728,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         int placed = 0;
         List<BlockFace> faces = List.of(
                 BlockFace.UP, BlockFace.NORTH, BlockFace.SOUTH,
-                BlockFace.EAST, BlockFace.WEST);
+                BlockFace.EAST, BlockFace.WEST, BlockFace.DOWN);
         int offset = Math.floorMod(
                 (trunk.getX() * 31) ^ (trunk.getY() * 17)
                         ^ (trunk.getZ() * 13),
@@ -4183,12 +4395,15 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                     && !NATURAL_DETAILS.contains(type)) {
                 continue;
             }
-            for (BlockFace face : NEIGHBORS) {
-                Block relative = block.getRelative(face);
+            for (int[] offset : TreeGroupTraversalPolicy.neighborOffsets(
+                    thoroughOwnershipScan)) {
+                Block relative = block.getRelative(
+                        offset[0], offset[1], offset[2]);
                 int distance = Math.abs(relative.getX() - base.getX())
                         + Math.abs(relative.getY() - base.getY())
                         + Math.abs(relative.getZ() - base.getZ());
-                if (distance <= TREE_GROUP_MAX_DISTANCE
+                if (distance <= TreeGroupTraversalPolicy.maximumDistance(
+                        TREE_GROUP_MAX_DISTANCE, thoroughOwnershipScan)
                         && relative.getY() >= base.getWorld().getMinHeight()
                         && relative.getY() < base.getWorld().getMaxHeight()
                         && isOwnedLoaded(relative)
@@ -4816,6 +5031,10 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     private record TreeWorkStatus(
             boolean needsFocus,
             boolean stageComplete,
+            boolean transitionPending,
+            boolean sourceSnapshot,
+            int sourceBlocks,
+            int unresolvedSourceLeaves,
             TreeGrowthQueuePolicy.Completion completion,
             TreeGrowthQueuePolicy.Budget budget,
             int exposedUpperLogs,
@@ -4823,6 +5042,11 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     ) {
         String summary() {
             return "stage-complete=" + stageComplete
+                    + " transition-pending=" + transitionPending
+                    + " source-snapshot=" + sourceSnapshot
+                    + " source-blocks=" + sourceBlocks
+                    + " unresolved-source-leaves="
+                    + unresolvedSourceLeaves
                     + " trunk=" + completion.trunkSummary()
                     + " branch=" + completion.branchSummary()
                     + " canopy=" + completion.canopySummary()

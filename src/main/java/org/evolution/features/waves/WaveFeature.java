@@ -30,6 +30,7 @@ import org.evolution.coreparts.EvolutionPlugin;
 import org.evolution.coreparts.hierarchy.FeatureActionHierarchy;
 import org.evolution.coreparts.hierarchy.FeatureHierarchyTrace;
 import org.evolution.features.waves.action.WaveActionPhase;
+import org.evolution.features.waves.action.WaveActionSubrule;
 
 public final class WaveFeature implements PluginFeature, Listener {
     private static final FeatureActionHierarchy<WaveActionPhase> ACTION_HIERARCHY =
@@ -158,6 +159,13 @@ public final class WaveFeature implements PluginFeature, Listener {
             traceHierarchy(WaveActionPhase.COLLECT_VISUALS, "collect-wave-visuals");
             ScanResult result = collectWaveVisuals(
                     player, profile, wind, tick, currentConfig, visuals, uncertainColumns);
+            traceHierarchy(
+                    WaveActionPhase.COLLECT_VISUALS,
+                    WaveActionSubrule.PER_PLAYER_COAST_AREA_DISTRIBUTION,
+                    "areas=" + result.sources().coastAreas()
+                            + " limited=" + result.sources().limitedCoastAreas()
+                            + " suppressed=" + result.sources().suppressedFronts()
+                            + " cap=" + currentConfig.maximumIncomingFrontsPerCoastAreaPerPlayer());
             traceHierarchy(WaveActionPhase.MERGE_FRONTS, "merge-front-contributions");
             traceHierarchy(WaveActionPhase.SHORE_RUNUP, "shore-runup-state");
             trimExpiredRunups(tick, currentConfig);
@@ -332,7 +340,8 @@ public final class WaveFeature implements PluginFeature, Listener {
         TravelingWaveRegistry.Update frontUpdate = travelingWaves.update(
                 player.getUniqueId(), world.getUID(), origin.getBlockX(), origin.getBlockZ(),
                 tick, profile, currentConfig.ovalSettings(), wind.x(), wind.z(),
-                radius, simulationRadius, lakeFlow);
+                radius, simulationRadius,
+                currentConfig.maximumIncomingFrontsPerCoastAreaPerPlayer(), lakeFlow);
         ViewMotion viewMotion = trackView(player.getUniqueId(), world.getUID(),
                 origin.getBlockX(), origin.getBlockZ(),
                 lakeFlow.centerX(), lakeFlow.centerZ());
@@ -833,6 +842,16 @@ public final class WaveFeature implements PluginFeature, Listener {
     // ## WAVES ACTION HIERARCHY
     private void traceHierarchy(WaveActionPhase phase, String reason) {
         FeatureHierarchyTrace.record(plugin, ACTION_HIERARCHY, phase, reason);
+    }
+
+    private void traceHierarchy(
+            WaveActionPhase phase,
+            WaveActionSubrule subrule,
+            String reason) {
+        // ## Nested trace ownership makes viewer distribution distinguishable from
+        // shared front simulation in architecture and resource debug reports.
+        FeatureHierarchyTrace.record(
+                plugin, ACTION_HIERARCHY, phase, subrule, reason);
     }
 
 }

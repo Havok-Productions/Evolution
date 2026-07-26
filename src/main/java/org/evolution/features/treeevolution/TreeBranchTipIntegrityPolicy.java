@@ -83,7 +83,8 @@ final class TreeBranchTipIntegrityPolicy {
 
     static int plannedClusterLeaves(int x, int y, int z, Material leafMaterial,
             Map<String, PlannedTreeBlock> blocksByKey) {
-        return connectedClusterLeaves(x, y, z, leafMaterial, blocksByKey);
+        return connectedClusterShape(
+                x, y, z, leafMaterial, blocksByKey).leaves();
     }
 
     static boolean hasPreplannedEnvelope(TreeDna dna, int x, int y, int z,
@@ -96,12 +97,13 @@ final class TreeBranchTipIntegrityPolicy {
             TreeMaturityStage maturityStage, TreeSpecies species,
             int x, int y, int z,
             Map<String, PlannedTreeBlock> blocksByKey) {
+        EnvelopeShape shape = plannedEnvelopeShape(
+                x, y, z, species.leafMaterial(), blocksByKey);
         return plannedLeafContacts(
                         x, y, z, species.leafMaterial(), blocksByKey)
                         >= requiredLeafContacts(maturityStage, species)
-                && plannedClusterLeaves(
-                        x, y, z, species.leafMaterial(), blocksByKey)
-                        >= requiredClusterLeaves(maturityStage, species);
+                && shape.leaves() >= requiredClusterLeaves(maturityStage, species)
+                && hasNaturalVolume(maturityStage, species, x, y, z, shape);
     }
 
     static int targetClusterLeaves(TreeDna dna, int x, int y, int z,
@@ -117,12 +119,36 @@ final class TreeBranchTipIntegrityPolicy {
                 plannedLeafContacts(x, y, z, dna.species().leafMaterial(), blocksByKey));
     }
 
+    static EnvelopeShape plannedEnvelopeShape(
+            int x, int y, int z, Material leafMaterial,
+            Map<String, PlannedTreeBlock> blocksByKey) {
+        return connectedClusterShape(x, y, z, leafMaterial, blocksByKey);
+    }
+
+    static boolean hasNaturalVolume(
+            TreeMaturityStage maturityStage, TreeSpecies species,
+            int tipX, int tipY, int tipZ, EnvelopeShape shape) {
+        if (shape.leaves() <= 0
+                || shape.maxX() - shape.minX() < 2
+                || shape.maxZ() - shape.minZ() < 2) {
+            return false;
+        }
+        boolean above = shape.maxY() > tipY;
+        boolean below = shape.minY() < tipY;
+        if (species == TreeSpecies.ACACIA) {
+            // ## Acacia keeps an umbrella silhouette, but even its terminal crown
+            // needs a second layer so a limb cannot terminate in a flat plate.
+            return above || below;
+        }
+        return above && below;
+    }
+
     private static String key(int x, int y, int z) {
         return x + ":" + y + ":" + z;
     }
 
     // ## A branch envelope is one connected leaf body rooted directly on the terminal limb.
-    private static int connectedClusterLeaves(
+    private static EnvelopeShape connectedClusterShape(
             int tipX, int tipY, int tipZ, Material leafMaterial,
             Map<String, PlannedTreeBlock> blocksByKey) {
         ArrayDeque<Cell> pending = new ArrayDeque<>();
@@ -134,9 +160,21 @@ final class TreeBranchTipIntegrityPolicy {
                     leafMaterial, blocksByKey);
         }
         int leaves = 0;
+        int minX = tipX;
+        int maxX = tipX;
+        int minY = tipY;
+        int maxY = tipY;
+        int minZ = tipZ;
+        int maxZ = tipZ;
         while (!pending.isEmpty()) {
             Cell current = pending.removeFirst();
             leaves++;
+            minX = Math.min(minX, current.x());
+            maxX = Math.max(maxX, current.x());
+            minY = Math.min(minY, current.y());
+            maxY = Math.max(maxY, current.y());
+            minZ = Math.min(minZ, current.z());
+            maxZ = Math.max(maxZ, current.z());
             for (int[] offset : DIRECT_NEIGHBORS) {
                 int nextX = current.x() + offset[0];
                 int nextY = current.y() + offset[1];
@@ -151,7 +189,8 @@ final class TreeBranchTipIntegrityPolicy {
                         leafMaterial, blocksByKey);
             }
         }
-        return leaves;
+        return new EnvelopeShape(
+                leaves, minX, maxX, minY, maxY, minZ, maxZ);
     }
 
     private static void addPlannedLeaf(
@@ -173,5 +212,16 @@ final class TreeBranchTipIntegrityPolicy {
     }
 
     private record Cell(int x, int y, int z) {
+    }
+
+    record EnvelopeShape(
+            int leaves,
+            int minX,
+            int maxX,
+            int minY,
+            int maxY,
+            int minZ,
+            int maxZ
+    ) {
     }
 }

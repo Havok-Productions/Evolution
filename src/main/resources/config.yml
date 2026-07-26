@@ -619,6 +619,10 @@ waves:
     distance: 16
     fetch-distance: 16
     minimum-facing: 0.20
+    # ## Per player, each stable 64-block coast area renders at most this many
+    # incoming fronts. Shared world waves keep simulating; excess visuals are hidden
+    # with stable, evenly spaced selection so movement does not reshuffle the coast.
+    maximum-incoming-fronts-per-coast-area-per-player: 3
   shoreline-runup:
     enabled: true
     max-distance: 6

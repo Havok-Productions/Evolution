@@ -64,7 +64,7 @@ public final class WaveTightWaterSteeringSmokeTest {
                 riverPlayer,
                 channelTopology.worldId(), 0, 0, 0L, riverProfile,
                 OvalWaveSettings.defaults(), 1.0D, 0.0D,
-                radius, radius, channelTopology);
+                radius, radius, 3, channelTopology);
         require(!riverStart.fronts().isEmpty(),
                 "small enclosed water must resolve a stable wave source");
         require(riverStart.lifecycle().steeringTransitions().stream()
@@ -92,7 +92,7 @@ public final class WaveTightWaterSteeringSmokeTest {
         TravelingWaveRegistry.Update riverNext = registry.update(
                 riverPlayer, channelTopology.worldId(), 0, 0, 20L, riverProfile,
                 OvalWaveSettings.defaults(), 1.0D, 0.0D,
-                radius, radius, channelTopology);
+                radius, radius, 3, channelTopology);
         double nextAverageX = riverNext.fronts().stream()
                 .mapToDouble(TravelingWaveFront::x).average().orElseThrow();
         double nextAverageZ = riverNext.fronts().stream()

@@ -947,6 +947,8 @@ final class TreeEvolutionDiagnostics {
                 dna.originalShapeLogCount());
         snapshot.put("original-shape-leaves",
                 dna.originalShapeLeafCount());
+        snapshot.put("original-shape-unresolved-leaves",
+                dna.unresolvedOriginalShapeLeafCount());
         snapshot.put("evolution-ownership-version",
                 dna.evolutionOwnershipVersion());
         snapshot.put("evolved-shape-logs", dna.evolvedLogCount());

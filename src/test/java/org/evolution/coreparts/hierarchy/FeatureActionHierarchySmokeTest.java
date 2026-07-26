@@ -13,6 +13,7 @@ import org.evolution.features.puddles.action.PuddleActionSubrule;
 import org.evolution.features.regrowth.action.RegrowthActionPhase;
 import org.evolution.features.regrowth.action.RegrowthActionSubrule;
 import org.evolution.features.waves.action.WaveActionPhase;
+import org.evolution.features.waves.action.WaveActionSubrule;
 import org.evolution.features.wind.action.WindActionPhase;
 
 public final class FeatureActionHierarchySmokeTest {
@@ -38,6 +39,10 @@ public final class FeatureActionHierarchySmokeTest {
                 PuddleActionSubrule.class);
         nested += verifySubrules("regrowth", RegrowthActionPhase.class,
                 RegrowthActionSubrule.class);
+        // ## Waves currently need one nested viewer-policy contract. It is tested
+        // without requiring unrelated simulation phases to invent empty subrules.
+        nested += verifySingleSubrule("waves", WaveActionPhase.class,
+                WaveActionSubrule.PER_PLAYER_COAST_AREA_DISTRIBUTION);
 
         System.out.println(
                 "Feature action hierarchy smoke test passed: "
@@ -115,6 +120,22 @@ public final class FeatureActionHierarchySmokeTest {
         return subrules.length;
     }
 
+    private static <
+            P extends Enum<P> & FeatureActionPhase,
+            S extends Enum<S> & FeatureActionSubrule<P>> int verifySingleSubrule(
+                    String feature,
+                    Class<P> phaseType,
+                    S subrule) {
+        FeatureActionHierarchy<P> hierarchy =
+                FeatureActionHierarchy.of(feature, phaseType);
+        FeatureActionDecision decision = hierarchy.decide(
+                subrule.phase(), subrule, "single-nested-smoke-test");
+        require(decision.subrule().equals(subrule.name()),
+                feature + " omitted nested rule " + subrule.name());
+        require(decision.owner().equals(subrule.owner()),
+                feature + " nested owner mismatch for " + subrule.name());
+        return 1;
+    }
     private static <P extends Enum<P>> P firstOtherPhase(
             Class<P> phaseType,
             P expected) {

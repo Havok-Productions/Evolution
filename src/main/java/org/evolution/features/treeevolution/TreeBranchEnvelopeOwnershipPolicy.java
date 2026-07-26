@@ -31,4 +31,19 @@ final class TreeBranchEnvelopeOwnershipPolicy {
     ) {
         return plannedCanopyLeaf && originalLeaf && !explicitlyEvolved;
     }
+
+    static boolean plannedCanopySatisfied(
+            boolean materialMatches,
+            boolean compatibleOrganicOccupant,
+            boolean originalLeaf,
+            boolean explicitlyEvolved
+    ) {
+        // ## Coordinate and material alone cannot complete a transition. A leaf
+        // captured in the source crown must first join the evolved ownership epoch.
+        if (materialMatches && shouldReformOriginalLeaf(
+                true, originalLeaf, explicitlyEvolved)) {
+            return false;
+        }
+        return materialMatches || compatibleOrganicOccupant;
+    }
 }

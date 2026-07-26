@@ -18,6 +18,7 @@ final class TravelingWaveRegistry {
     private static final int SOURCE_CELL_SIZE = 192;
     private static final int SOURCE_SEARCH_RADIUS = 80;
     private static final int FRONTS_PER_SOURCE = 4;
+    private static final int COAST_SEGMENT_SIZE = 48;
     private static final int SOURCE_CACHE_LIMIT = 512;
     private static final long SOURCE_RETENTION_MILLIS = 600_000L;
     private static final int PASSAGE_PROBE_REACH = 40;
@@ -40,6 +41,7 @@ final class TravelingWaveRegistry {
     Update update(UUID playerId, UUID worldId, int playerX, int playerZ, long tick,
             WaveProfile profile, OvalWaveSettings settings, double windX, double windZ,
             int renderRadius, int simulationRadius,
+            int maximumIncomingFrontsPerCoastAreaPerPlayer,
             WaveLakeFlowCache.Snapshot topology) {
         double moved = 0.0D;
         int shoreGuided = 0;
@@ -92,7 +94,29 @@ final class TravelingWaveRegistry {
             steeringTransitions.addAll(sourceUpdate.lifecycle().steeringTransitions());
         }
 
-        List<TravelingWaveFront> snapshot = Collections.unmodifiableList(new ArrayList<>(visible));
+        // ## Simulation stays world-fixed. Only this viewer's packet set is capped,
+        // retaining prior choices and spreading impacts across each coast area.
+        List<TravelingWaveFront> previousVisible =
+                visibleByPlayer.getOrDefault(playerId, List.of());
+        WaveCoastAreaViewPolicy.Selection distribution =
+                WaveCoastAreaViewPolicy.select(
+                        visible, previousVisible, maximumIncomingFrontsPerCoastAreaPerPlayer);
+        List<TravelingWaveFront> snapshot = distribution.fronts();
+        int markerBudget = 8;
+        for (Map.Entry<WaveCoastAreaViewPolicy.CoastArea,
+                WaveCoastAreaViewPolicy.AreaDistribution> entry
+                : distribution.distributions().entrySet()) {
+            if (entry.getValue().suppressed() <= 0 || markerBudget-- <= 0) {
+                continue;
+            }
+            steeringTransitions.add("[VIEW][COAST-AREA-CAP] area="
+                    + entry.getKey()
+                    + " candidates=" + entry.getValue().candidates()
+                    + " selected=" + entry.getValue().selected()
+                    + " suppressed=" + entry.getValue().suppressed()
+                    + " selected-ids=" + entry.getValue().selectedIds()
+                    + " viewer-scoped=true evenly-spaced=true");
+        }
         if (snapshot.isEmpty()) {
             visibleByPlayer.remove(playerId);
         } else {
@@ -104,7 +128,9 @@ final class TravelingWaveRegistry {
                 shoreFizzleIds, distanceFizzleIds, mergeTransitions, steeringTransitions,
                 0L, 0L, false);
         SourceSummary sources = new SourceSummary(
-                activeSources, snapshot.size(), SOURCE_CELL_SIZE, new ArrayList<>(anchors));
+                activeSources, snapshot.size(), SOURCE_CELL_SIZE,
+                distribution.coastAreas(), distribution.limitedAreas(),
+                distribution.suppressedFronts(), new ArrayList<>(anchors));
         return new Update(snapshot, moved, shoreGuided, impacts, mergedFronts,
                 lifecycle, directionSummary(snapshot), sources);
     }
@@ -1117,7 +1143,8 @@ final class TravelingWaveRegistry {
     }
 
     record SourceSummary(int activeSources, int visibleFronts,
-            int sourceCellSize, List<String> anchors) {
+            int sourceCellSize, int coastAreas, int limitedCoastAreas,
+            int suppressedFronts, List<String> anchors) {
         SourceSummary {
             anchors = List.copyOf(anchors);
         }
@@ -1126,6 +1153,9 @@ final class TravelingWaveRegistry {
             return "static-sources=" + activeSources
                     + " visible-fronts=" + visibleFronts
                     + " grid=" + sourceCellSize
+                    + " coast-areas=" + coastAreas
+                    + " limited-coast-areas=" + limitedCoastAreas
+                    + " viewer-suppressed-fronts=" + suppressedFronts
                     + " anchors=" + anchors;
         }
     }

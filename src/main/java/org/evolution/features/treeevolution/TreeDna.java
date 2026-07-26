@@ -8,7 +8,9 @@ import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 
 final class TreeDna {
-    static final int CURRENT_SHAPE_REVISION = 5;
+    // ## Revision 6 recaptures revision-5 live crowns once so completed trees
+    // can retire residual source foliage under the ownership-aware constructor.
+    static final int CURRENT_SHAPE_REVISION = 6;
     private final UUID worldId;
     private final int baseX;
     private final int baseY;
@@ -706,6 +708,14 @@ final class TreeDna {
         return transitionLedger.sourceLeaves().size();
     }
 
+    int unresolvedOriginalShapeLeafCount() {
+        return transitionLedger.unresolvedSourceLeafCount();
+    }
+
+    boolean originalShapeCaptureIsCurrent() {
+        return transitionLedger.captureIsCurrent();
+    }
+
     Set<String> originalShapeLogs() {
         return transitionLedger.sourceLogs();
     }
@@ -793,6 +803,13 @@ final class TreeDna {
         // tree changes cannot silently redefine which source blocks belonged
         // to the original trunk or crown.
         transitionLedger = TreeTransitionLedger.capture(logKeys, leafKeys);
+    }
+
+    void expandOriginalShape(Collection<String> logKeys,
+            Collection<String> leafKeys) {
+        // ## Ownership capture version 2 includes diagonally connected fancy
+        // foliage while preserving every evolved/pruned decision already made.
+        transitionLedger = transitionLedger.expandSource(logKeys, leafKeys);
     }
 
     private void restoreOriginalShape(Collection<String> logKeys,

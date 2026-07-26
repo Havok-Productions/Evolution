@@ -5,6 +5,10 @@ import java.util.Random;
 import org.bukkit.Axis;
 
 final class CanopyPlanner {
+    private static final int[][] LOWER_FRINGE_OFFSETS = {
+            {1, 0}, {0, 1}, {-1, 0}, {0, -1},
+            {1, 1}, {-1, 1}, {-1, -1}, {1, -1}
+    };
     private static final int[][] TIP_CONTACT_OFFSETS = {
             {0, 1, 0},
             {1, 0, 0},
@@ -161,6 +165,8 @@ final class CanopyPlanner {
         if (dna.maturityStage() == TreeMaturityStage.MEDIUM) {
             planLeafBlob(plan, dna, centerX, baseY + 2, centerZ, Math.max(1, radiusX - 2), 1, Math.max(1, radiusZ - 2), random);
         }
+        planNaturalMainCrownFringe(
+                plan, dna, centerX, baseY, centerZ, radiusX, radiusZ);
 
         int tipCap = earlyBranchTipCanopyCap(dna);
         for (TreeBranchPlan.BranchTip tip : branchTips) {
@@ -168,6 +174,84 @@ final class CanopyPlanner {
             if (dna.maturityStage() == TreeMaturityStage.MEDIUM && dna.species() != TreeSpecies.BIRCH) {
                 planLeafBlob(plan, dna, tip.x(), tip.y() + 1, tip.z(), Math.max(1, tipCap - 1), 1, Math.max(1, tipCap - 1), random);
             }
+            planNaturalLowerFringe(plan, dna, tip);
+        }
+    }
+
+    private void planNaturalMainCrownFringe(
+            TreePlan plan, TreeDna dna,
+            int centerX, int baseY, int centerZ,
+            int radiusX, int radiusZ) {
+        int tufts = switch (dna.species()) {
+            case BIRCH, ACACIA -> 2;
+            case OAK, CHERRY, MANGROVE ->
+                    dna.maturityStage() == TreeMaturityStage.SMALL ? 3 : 4;
+            case DARK_OAK, JUNGLE -> 5;
+            case SPRUCE -> 0;
+        };
+        int rotation = Math.floorMod(
+                Long.hashCode(dna.seed()) ^ 0x51A0E77,
+                LOWER_FRINGE_OFFSETS.length);
+        int added = 0;
+        int maximumDepth = Math.max(radiusX, radiusZ);
+        for (int depth = 0; depth < maximumDepth && added < tufts; depth++) {
+            int reachX = Math.max(1, radiusX - depth);
+            int reachZ = Math.max(1, radiusZ - depth);
+            for (int index = 0; index < LOWER_FRINGE_OFFSETS.length
+                    && added < tufts; index++) {
+                int[] direction = LOWER_FRINGE_OFFSETS[
+                        (rotation + index) % LOWER_FRINGE_OFFSETS.length];
+                int x = centerX + (direction[0] * reachX);
+                int z = centerZ + (direction[1] * reachZ);
+                int y = baseY - 2;
+                PlannedTreeBlock support = plan.blocksByKey().get(
+                        x + ":" + (y + 1) + ":" + z);
+                if (support == null
+                        || support.role() != TreeBlockRole.CANOPY
+                        || plan.blocksByKey().containsKey(
+                                x + ":" + y + ":" + z)) {
+                    continue;
+                }
+                // ## Every lower tuft hangs from the planned main cloud. The
+                // deterministic asymmetric selection breaks flat cut planes
+                // without creating detached leaves or rerolling after restart.
+                plan.add(new PlannedTreeBlock(
+                        x, y, z, dna.species().leafMaterial(),
+                        TreeBlockRole.CANOPY, Axis.Y, null));
+                added++;
+            }
+        }
+    }
+
+    private void planNaturalLowerFringe(
+            TreePlan plan, TreeDna dna, TreeBranchPlan.BranchTip tip) {
+        int tufts = switch (dna.species()) {
+            case BIRCH, ACACIA -> 1;
+            case SPRUCE -> 2;
+            case OAK, CHERRY, MANGROVE -> 3;
+            case DARK_OAK, JUNGLE -> 4;
+        };
+        int rotation = Math.floorMod(
+                Long.hashCode(dna.seed()) ^ (tip.branchId() * 37),
+                LOWER_FRINGE_OFFSETS.length);
+        int added = 0;
+        for (int index = 0; index < LOWER_FRINGE_OFFSETS.length
+                && added < tufts; index++) {
+            int[] offset = LOWER_FRINGE_OFFSETS[
+                    (rotation + index) % LOWER_FRINGE_OFFSETS.length];
+            int x = tip.x() + offset[0];
+            int y = tip.y() - 2;
+            int z = tip.z() + offset[1];
+            PlannedTreeBlock support = plan.blocksByKey().get(
+                    x + ":" + (y + 1) + ":" + z);
+            if (support == null || support.role() != TreeBlockRole.CANOPY
+                    || plan.blocksByKey().containsKey(x + ":" + y + ":" + z)) {
+                continue;
+            }
+            plan.add(new PlannedTreeBlock(
+                    x, y, z, dna.species().leafMaterial(),
+                    TreeBlockRole.CANOPY, Axis.Y, null));
+            added++;
         }
     }
 

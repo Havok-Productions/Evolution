@@ -22,18 +22,30 @@ public final class TreeFocusPolicySmokeTest {
                 "an uncovered live branch tip must retain focus even after global canopy completion");
         require(TreeFocusPolicy.needsFocus(true, finished, budget, 0, 0),
                 "an active transition must retain focus until its state is closed");
+        require(TreeFocusPolicy.transitionPending(
+                        0, 0, false, true),
+                "an orphaned source snapshot must retain focus after numeric bursts expire");
+        require(TreeFocusPolicy.transitionPending(
+                        0, 0, true, true),
+                "a complete source snapshot remains pending until finalization closes it");
+        require(!TreeFocusPolicy.transitionPending(
+                        0, 0, true, false),
+                "a finalized complete tree must release transition focus");
         require(TreeFocusPolicy.shouldFinalizeTransition(
-                        true, 0, 0, true),
+                        true, 0, 0, true, 0),
                 "a complete tree must release a stale snapshot after its action allowance expires");
         require(TreeFocusPolicy.shouldFinalizeTransition(
-                        true, 0, 5, false),
+                        true, 0, 5, false, 0),
                 "a complete tree must clear unused transition allowance");
         require(!TreeFocusPolicy.shouldFinalizeTransition(
-                        false, 0, 0, true),
+                        false, 0, 0, true, 0),
                 "an incomplete projected tree must retain its source snapshot");
         require(!TreeFocusPolicy.shouldFinalizeTransition(
-                        true, 6, 0, true),
+                        true, 6, 0, true, 0),
                 "active cleanup must finish before transition state is released");
+        require(!TreeFocusPolicy.shouldFinalizeTransition(
+                        true, 0, 0, true, 1),
+                "an unresolved captured source leaf must keep the snapshot open");
         require(TreeFocusPolicy.readyForMaturity(
                         true, 0, 0, false),
                 "a structurally complete and finalized stage may mature");

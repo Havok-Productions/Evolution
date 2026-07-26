@@ -21,6 +21,7 @@ public final class TreeBranchTipIntegrityPolicySmokeTest {
         addCanopy(blocks, -1, 64, -1, Material.OAK_LEAVES);
         addCanopy(blocks, 0, 65, 1, Material.OAK_LEAVES);
         addCanopy(blocks, 0, 65, -1, Material.OAK_LEAVES);
+        addCanopy(blocks, 1, 63, 0, Material.OAK_LEAVES);
 
         require(TreeBranchTipIntegrityPolicy.plannedLeafContacts(
                         0, 64, 0, Material.OAK_LEAVES, blocks) == 3,
@@ -32,13 +33,31 @@ public final class TreeBranchTipIntegrityPolicySmokeTest {
                         TreeMaturityStage.MEDIUM, TreeSpecies.OAK) == 10,
                 "medium oak branches should own a substantial local leaf envelope");
         require(TreeBranchTipIntegrityPolicy.plannedClusterLeaves(
-                        0, 64, 0, Material.OAK_LEAVES, blocks) == 10,
+                        0, 64, 0, Material.OAK_LEAVES, blocks) == 11,
                 "the local envelope should count only nearby planned canopy");
         require(TreeBranchTipIntegrityPolicy.hasPreplannedEnvelope(
                         TreeMaturityStage.MEDIUM, TreeSpecies.OAK,
                         0, 64, 0, blocks),
                 "branch placement must be allowed only after its full envelope is planned");
 
+        Map<String, PlannedTreeBlock> flat = new HashMap<>();
+        addCanopy(flat, 1, 64, 0, Material.OAK_LEAVES);
+        addCanopy(flat, -1, 64, 0, Material.OAK_LEAVES);
+        addCanopy(flat, 0, 64, 1, Material.OAK_LEAVES);
+        addCanopy(flat, 0, 64, -1, Material.OAK_LEAVES);
+        addCanopy(flat, 1, 64, 1, Material.OAK_LEAVES);
+        addCanopy(flat, -1, 64, 1, Material.OAK_LEAVES);
+        addCanopy(flat, 1, 64, -1, Material.OAK_LEAVES);
+        addCanopy(flat, -1, 64, -1, Material.OAK_LEAVES);
+        addCanopy(flat, 2, 64, 0, Material.OAK_LEAVES);
+        addCanopy(flat, -2, 64, 0, Material.OAK_LEAVES);
+        require(TreeBranchTipIntegrityPolicy.plannedClusterLeaves(
+                        0, 64, 0, Material.OAK_LEAVES, flat) == 10,
+                "the flat fixture should satisfy the old numeric envelope rule");
+        require(!TreeBranchTipIntegrityPolicy.hasPreplannedEnvelope(
+                        TreeMaturityStage.MEDIUM, TreeSpecies.OAK,
+                        0, 64, 0, flat),
+                "a flat shelf must not pass as a natural oak branch crown");
         Map<String, PlannedTreeBlock> disconnected = new HashMap<>();
         addCanopy(disconnected, 1, 64, 0, Material.OAK_LEAVES);
         addCanopy(disconnected, -1, 64, 0, Material.OAK_LEAVES);
@@ -65,7 +84,7 @@ public final class TreeBranchTipIntegrityPolicySmokeTest {
                 "birch envelopes should stay lighter than broad-crowned species");
 
         System.out.println("Tree branch-tip integrity smoke test passed: "
-                + "direct-anchor=1 connected-envelope=10 species-aware=true");
+                + "direct-anchor=1 connected-envelope=3d flat-shelf-rejected=true species-aware=true");
     }
 
     private static void addCanopy(Map<String, PlannedTreeBlock> blocks,

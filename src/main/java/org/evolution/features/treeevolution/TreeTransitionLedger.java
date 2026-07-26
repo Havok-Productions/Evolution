@@ -8,7 +8,7 @@ import java.util.Set;
  * Immutable ownership ledger for one stage transition.
  */
 final class TreeTransitionLedger {
-    static final int CURRENT_OWNERSHIP_VERSION = 1;
+    static final int CURRENT_OWNERSHIP_VERSION = 2;
 
     private static final TreeTransitionLedger EMPTY =
             new TreeTransitionLedger(
@@ -96,6 +96,27 @@ final class TreeTransitionLedger {
                 evolvedLogs, evolvedLeaves, ownershipVersion);
     }
 
+    TreeTransitionLedger expandSource(
+            Collection<String> logKeys,
+            Collection<String> leafKeys
+    ) {
+        // ## Capture upgrades add missed fancy-tree foliage without reclassifying
+        // blocks already placed by the active evolution as original source shape.
+        Set<String> discoveredLogs = new HashSet<>(immutableKeys(logKeys));
+        discoveredLogs.removeAll(evolvedLogs);
+        Set<String> logs = new HashSet<>(sourceLogs);
+        logs.addAll(discoveredLogs);
+        Set<String> discoveredLeaves = new HashSet<>(immutableKeys(leafKeys));
+        discoveredLeaves.removeAll(evolvedLeaves);
+        Set<String> leaves = new HashSet<>(sourceLeaves);
+        leaves.addAll(discoveredLeaves);
+        Set<String> retired = new HashSet<>(retiredLeaves);
+        retired.retainAll(leaves);
+        return copyWith(
+                Set.copyOf(logs), Set.copyOf(leaves), Set.copyOf(retired),
+                evolvedLogs, evolvedLeaves, CURRENT_OWNERSHIP_VERSION);
+    }
+
     TreeTransitionLedger recordEvolvedLog(String blockKey) {
         return recordEvolved(blockKey, true);
     }
@@ -141,6 +162,21 @@ final class TreeTransitionLedger {
 
     int sourceBlockCount() {
         return sourceLogs.size() + sourceLeaves.size();
+    }
+
+    int unresolvedSourceLeafCount() {
+        int unresolved = 0;
+        for (String leaf : sourceLeaves) {
+            if (!retiredLeaves.contains(leaf)
+                    && !evolvedLeaves.contains(leaf)) {
+                unresolved++;
+            }
+        }
+        return unresolved;
+    }
+
+    boolean captureIsCurrent() {
+        return ownershipVersion >= CURRENT_OWNERSHIP_VERSION;
     }
 
     int ownershipVersion() {
