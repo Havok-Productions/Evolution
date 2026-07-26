@@ -321,6 +321,30 @@ final class TreeEvolutionDiagnostics {
         saveSoon(plugin, config);
     }
 
+    void recordSeedlingGerminated(
+            EvolutionPlugin plugin,
+            TreeEvolutionConfig config,
+            Block block,
+            TreeDna child,
+            String source
+    ) {
+        placed.incrementAndGet();
+        lastLineageSummary = "tree=" + child.key()
+                + ", parent=" + child.parentKey()
+                + ", generation=" + child.generation()
+                + ", species=" + child.species().id()
+                + ", germinated-at=" + format(block);
+        event(config, "[ACTION][tree-evolution] seedling.germinate"
+                + " material=" + child.species().logMaterial()
+                + " at=" + format(block)
+                + " parent=" + child.parentKey()
+                + " generation=" + child.generation()
+                + " source=" + source
+                + " ## one trunk block entered the gradual constructor; "
+                + "no vanilla whole-tree structure was applied");
+        buildMap(block, config.debugMapRadius());
+        saveSoon(plugin, config);
+    }
     void recordReject(TreeEvolutionConfig config, String reason, String detail) {
         rejected.incrementAndGet();
         event(config, "[GATE][tree-evolution] blocked." + reason + " -> " + detail);

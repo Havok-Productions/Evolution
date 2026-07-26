@@ -13,7 +13,9 @@ public final class LiveTreeDnaRegressionSmokeTest {
 
     public static void main(String[] args) {
         assertLiveTerminalClassification();
-        List<TreeDna> fixtures = List.of(reportedOak(), reportedBirch());
+        List<TreeDna> fixtures = List.of(
+                reportedOak(), reportedBirch(), reportedAcacia(),
+                reportedRestartOak());
         for (TreeDna dna : fixtures) {
             TreePlan plan = PLANNER.plan(dna, null, false);
             TreeShapeEngine.ShapeReport report = SHAPE_ENGINE.analyze(plan, dna);
@@ -23,6 +25,8 @@ public final class LiveTreeDnaRegressionSmokeTest {
                     dna.species() + " fixture has a branch without a natural canopy envelope");
             require(report.topCovered(),
                     dna.species() + " fixture leaves its upper trunk exposed");
+            require(report.normalEnough(),
+                    dna.species() + " fixture failed the complete shape model audit");
             for (TreeBranchPlan branch : plan.branchPlans()) {
                 TreeBranchPlan.BranchTip tip = branch.tip();
                 require(TreeBranchTipIntegrityPolicy.hasPreplannedEnvelope(
@@ -37,26 +41,38 @@ public final class LiveTreeDnaRegressionSmokeTest {
                     + " leaves=" + report.leaves()
                     + " pruned-invalid=" + plan.prunedBranchCount());
         }
-        System.out.println("Live tree DNA regression smoke test passed: fixtures=2");
+        System.out.println("Live tree DNA regression smoke test passed: fixtures=4");
     }
 
     private static void assertLiveTerminalClassification() {
         require(TreeLiveTerminalPolicy.classify(
-                        true, null, 8, 4, 0)
+                        true, true, null, 8, 4, 0)
                         == TreeLiveTerminalPolicy.Decision.PRUNE_UNPLANNED_BARE_TERMINAL,
                 "a floating unplanned log must be pruned");
         require(TreeLiveTerminalPolicy.classify(
-                        true, null, 8, 4, 1)
+                        true, true, null, 8, 4, 1)
                         == TreeLiveTerminalPolicy.Decision.PRUNE_UNPLANNED_BARE_TERMINAL,
                 "a stale one-parent protrusion must be pruned");
         require(TreeLiveTerminalPolicy.classify(
-                        true, TreeBlockRole.BRANCH, 8, 4, 1)
+                        true, false, TreeBlockRole.BRANCH, 8, 4, 1)
                         == TreeLiveTerminalPolicy.Decision.KEEP_PLANNED_WOOD,
                 "an incomplete planned branch must remain available for growth");
         require(TreeLiveTerminalPolicy.classify(
-                        true, null, 8, 4, 1)
+                        true, true, null, 8, 4, 1)
                         == TreeLiveTerminalPolicy.Decision.PRUNE_UNPLANNED_BARE_TERMINAL,
                 "incidental leaves must not legitimize wood absent from the branch plan");
+        require(TreeLiveTerminalPolicy.classify(
+                        true, false, null, 8, 4, 1)
+                        == TreeLiveTerminalPolicy.Decision.KEEP_UNOWNED_WOOD,
+                "source or neighboring wood must never enter destructive terminal cleanup");
+        require(TreeLiveTerminalPolicy.classify(
+                        false, true, null, 8, 4, 1)
+                        == TreeLiveTerminalPolicy.Decision.PRUNE_UNPLANNED_BARE_TERMINAL,
+                "an exact persisted Evolution log must remain auditable after a compact restart scan");
+        require(TreeLiveTerminalPolicy.classify(
+                        false, false, null, 8, 4, 1)
+                        == TreeLiveTerminalPolicy.Decision.WAIT_OWNERSHIP,
+                "unowned wood must still wait for complete ownership evidence");
     }
     // ## Exact structural traits from the reported live oak; no world or player data is required.
     private static TreeDna reportedOak() {
@@ -91,6 +107,42 @@ public final class LiveTreeDnaRegressionSmokeTest {
                 0L, 0L, 0, true);
     }
 
+    // ## Exact DNA from the reported acacia near -145,100,-4221. The target
+    // must remain a connected, covered fancy acacia independent of live overlap.
+    private static TreeDna reportedAcacia() {
+        return new TreeDna(
+                FIXTURE_WORLD, -145, 100, -4221,
+                TreeSpecies.ACACIA, 4163027354591221137L,
+                TreePersonality.UMBRELLA, TreeRarity.COMMON,
+                20, 7, 2, 6, 3,
+                6, 6, 2, 5, 0.54D,
+                0.30D, 0.5344924731906724D,
+                0.18D, 0.02D, 0.12D,
+                3, 0, 6, 1, 1, 0.6097202114330876D,
+                "config-default", "config.yml", "wild", 0, 6,
+                TreeGrowthIntent.CANOPY, 4, 0, 0, 163, 0, 0,
+                171, TreeMaturityStage.SMALL,
+                0L, 0L, 0, true);
+    }
+
+    // ## Exact DNA from the reported oak at -1445,64,395. Its current
+    // target is healthy; the live defect was stale lower-stage wood omitted
+    // by the compact post-restart candidate scan.
+    private static TreeDna reportedRestartOak() {
+        return new TreeDna(
+                FIXTURE_WORLD, -1445, 64, 395,
+                TreeSpecies.OAK, -5138120179190301385L,
+                TreePersonality.BALANCED, TreeRarity.UNCOMMON,
+                22, 10, 2, 5, 0,
+                5, 5, 3, 5, 0.74D,
+                0.62D, 0.5246288139429754D,
+                0.32D, 0.08D, 0.28D,
+                3, 1, 6, 0, 0, 0.670177559930155D,
+                "config-default", "config.yml", "wild", 0, 6,
+                TreeGrowthIntent.CANOPY, 11, 0, 0, 749, 0, 0,
+                749, TreeMaturityStage.MEDIUM,
+                0L, 0L, 0, true);
+    }
     private static void require(boolean condition, String message) {
         if (!condition) {
             throw new IllegalStateException(message);

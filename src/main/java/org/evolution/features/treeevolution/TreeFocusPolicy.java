@@ -40,6 +40,24 @@ final class TreeFocusPolicy {
                 || hasOriginalSnapshot;
     }
 
+    static boolean completeOwnershipRequired(
+            int cleanupBurst,
+            int damageCount,
+            boolean repairRequested,
+            boolean stageComplete,
+            boolean hasOriginalSnapshot,
+            int unresolvedSourceLeaves
+    ) {
+        // ## A completed target with unresolved source foliage is still an active
+        // transition even after its numeric cleanup allowance reaches zero.
+        return cleanupBurst > 0
+                || damageCount > 0
+                || repairRequested
+                || (stageComplete
+                        && hasOriginalSnapshot
+                        && unresolvedSourceLeaves > 0);
+    }
+
     static boolean readyForMaturity(boolean stageComplete,
             int cleanupBurst, int growthBurst, boolean hasOriginalSnapshot) {
         return stageComplete

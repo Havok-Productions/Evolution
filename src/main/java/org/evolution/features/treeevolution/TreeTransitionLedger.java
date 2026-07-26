@@ -121,6 +121,16 @@ final class TreeTransitionLedger {
         return recordEvolved(blockKey, true);
     }
 
+    TreeTransitionLedger retireEvolvedLog(String blockKey) {
+        if (!evolvedLogs.contains(blockKey)) {
+            return this;
+        }
+        Set<String> updated = new HashSet<>(evolvedLogs);
+        updated.remove(blockKey);
+        return copyWith(
+                sourceLogs, sourceLeaves, retiredLeaves,
+                Set.copyOf(updated), evolvedLeaves, ownershipVersion);
+    }
     TreeTransitionLedger recordEvolvedLeaf(String blockKey) {
         return recordEvolved(blockKey, false);
     }
@@ -128,9 +138,12 @@ final class TreeTransitionLedger {
     TreeTransitionLedger completeTransition() {
         // ## Keep the last evolution epoch after the source snapshot closes.
         // Completed trees remain auditable until the next stage captures a new epoch.
+        Set<String> completedLogs = new HashSet<>(evolvedLogs);
+        completedLogs.addAll(sourceLogs);
         return copyWith(
                 Set.of(), Set.of(), Set.of(),
-                evolvedLogs, evolvedLeaves, CURRENT_OWNERSHIP_VERSION);
+                Set.copyOf(completedLogs), evolvedLeaves,
+                CURRENT_OWNERSHIP_VERSION);
     }
 
     boolean canRetireLeaf(String blockKey) {
@@ -154,6 +167,13 @@ final class TreeTransitionLedger {
                 evolvedLeaves.contains(blockKey),
                 ownershipVersion < CURRENT_OWNERSHIP_VERSION && hasSnapshot(),
                 sourceLeaves.contains(blockKey));
+    }
+
+    boolean countsAsOwnedLog(String blockKey) {
+        if (ownershipVersion < CURRENT_OWNERSHIP_VERSION && !hasSnapshot()) {
+            return true;
+        }
+        return sourceLogs.contains(blockKey) || evolvedLogs.contains(blockKey);
     }
 
     boolean isOriginalLeaf(String blockKey) {

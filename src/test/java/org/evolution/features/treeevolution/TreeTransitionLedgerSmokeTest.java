@@ -9,9 +9,11 @@ public final class TreeTransitionLedgerSmokeTest {
 
     public static void main(String[] args) {
         String sourceLeaf = "world:10:70:10";
+        String sourceLog = "world:10:68:10";
         String evolvedLeaf = "world:12:72:10";
+        String evolvedLog = "world:14:72:10";
         TreeTransitionLedger captured = TreeTransitionLedger.capture(
-                List.of("world:10:68:10"),
+                List.of(sourceLog),
                 List.of(sourceLeaf, "world:11:70:10"));
 
         require(captured.canRetireLeaf(sourceLeaf),
@@ -22,6 +24,10 @@ public final class TreeTransitionLedgerSmokeTest {
                 "An original source leaf must not satisfy a new branch envelope.");
         require(captured.unresolvedSourceLeafCount() == 2,
                 "Every captured source leaf starts unresolved.");
+        require(captured.countsAsOwnedLog(sourceLog),
+                "Captured source trunk wood must belong to this tree.");
+        require(!captured.countsAsOwnedLog("world:30:70:30"),
+                "A neighboring log must not satisfy this tree's model.");
 
         TreeTransitionLedger reformed = captured.recordEvolvedLeaf(sourceLeaf);
         require(reformed.countsAsEvolvedLeaf(sourceLeaf),
@@ -29,6 +35,17 @@ public final class TreeTransitionLedgerSmokeTest {
         TreeTransitionLedger evolved = reformed.recordEvolvedLeaf(evolvedLeaf);
         require(evolved.countsAsEvolvedLeaf(evolvedLeaf),
                 "A leaf placed by this evolution must be owned.");
+
+        TreeTransitionLedger withBranch = evolved.recordEvolvedLog(evolvedLog);
+        require(withBranch.countsAsOwnedLog(evolvedLog),
+                "An explicitly placed branch log must be owned.");
+        TreeTransitionLedger withoutStaleBranch =
+                withBranch.retireEvolvedLog(evolvedLog);
+        require(!withoutStaleBranch.countsAsOwnedLog(evolvedLog),
+                "A pruned stale branch must release its ownership receipt.");
+        require(withoutStaleBranch.retireEvolvedLog(evolvedLog)
+                        == withoutStaleBranch,
+                "Repeated stale-branch retirement should be idempotent.");
 
         TreeTransitionLedger retired = evolved.retireLeaf(sourceLeaf);
         require(!retired.canRetireLeaf(sourceLeaf),
@@ -69,6 +86,8 @@ public final class TreeTransitionLedgerSmokeTest {
         require(completed.countsAsEvolvedLeaf(sourceLeaf)
                         && completed.countsAsEvolvedLeaf(evolvedLeaf),
                 "Completed trees must retain the last evolved canopy epoch for audit.");
+        require(completed.countsAsOwnedLog(sourceLog),
+                "Retained source trunk wood must become owned evolved wood when the transition closes.");
 
         TreeTransitionLedger nextStage = TreeTransitionLedger.capture(
                 Set.of("world:10:68:10"), Set.of(sourceLeaf));

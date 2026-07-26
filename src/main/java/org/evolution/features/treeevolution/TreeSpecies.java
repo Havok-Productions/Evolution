@@ -60,6 +60,12 @@ public enum TreeSpecies {
                 .findFirst();
     }
 
+    public static Optional<TreeSpecies> fromSaplingMaterial(Material material) {
+        return Arrays.stream(values())
+                .filter(species -> species.saplingMaterial == material)
+                .findFirst();
+    }
+
     public static Optional<TreeSpecies> fromId(String id) {
         return Arrays.stream(values())
                 .filter(species -> species.id.equalsIgnoreCase(id) || species.name().equalsIgnoreCase(id))

@@ -37,13 +37,23 @@ final class TreeConstructorCore {
             boolean broadCleanupReady,
             boolean retiredCrownRemaining
     ) {
-        boolean completeOwnershipRequired = dna.stageCleanupBurst() > 0
-                || dna.damageCount() > 0
-                || requestedIntent == TreeGrowthIntent.REPAIR;
+        boolean stageComplete = TreeFocusPolicy.stageStructureComplete(
+                completion, budget, exposedUpperLogs, uncoveredBranchTips);
+        boolean transitionPending = TreeFocusPolicy.transitionPending(
+                dna.stageCleanupBurst(), dna.stageGrowthBurst(),
+                stageComplete, dna.hasOriginalShapeSnapshot());
+        boolean completeOwnershipRequired =
+                TreeFocusPolicy.completeOwnershipRequired(
+                        dna.stageCleanupBurst(),
+                        dna.damageCount(),
+                        requestedIntent == TreeGrowthIntent.REPAIR,
+                        stageComplete,
+                        dna.hasOriginalShapeSnapshot(),
+                        dna.unresolvedOriginalShapeLeafCount());
         TreeConstructionState state = new TreeConstructionState(
                 !completeOwnershipRequired || candidate.ownershipComplete(),
                 dna.hasOriginalShapeSnapshot(),
-                dna.stageCleanupBurst() > 0,
+                transitionPending,
                 dna.damageCount() > 0
                         || requestedIntent == TreeGrowthIntent.REPAIR,
                 transitionBlockerReady,

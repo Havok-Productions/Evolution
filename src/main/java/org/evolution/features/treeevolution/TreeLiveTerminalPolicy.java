@@ -6,11 +6,14 @@ final class TreeLiveTerminalPolicy {
 
     static Decision classify(
             boolean ownershipComplete,
+            boolean evolvedLogOwned,
             TreeBlockRole plannedRole,
             int heightAboveBase,
             int trunkDistance,
             int woodNeighbors) {
-        if (!ownershipComplete) {
+        // ## A compact post-restart scan may omit a distant lower branch. The
+        // persisted evolved-log receipt is still exact destructive authority.
+        if (!ownershipComplete && !evolvedLogOwned) {
             return Decision.WAIT_OWNERSHIP;
         }
         if (heightAboveBase < 2 || trunkDistance <= 1) {
@@ -23,6 +26,11 @@ final class TreeLiveTerminalPolicy {
         if (woodNeighbors > 1) {
             return Decision.KEEP_INTERNAL_WOOD;
         }
+        if (!evolvedLogOwned) {
+            // ## Source and neighboring logs are immutable evidence. Terminal
+            // cleanup may remove only wood placed by this evolution epoch.
+            return Decision.KEEP_UNOWNED_WOOD;
+        }
         // ## Incidental leaves do not legitimize terminal wood absent from the deterministic branch plan.
         return Decision.PRUNE_UNPLANNED_BARE_TERMINAL;
     }
@@ -32,6 +40,7 @@ final class TreeLiveTerminalPolicy {
         KEEP_TRUNK_CORE,
         KEEP_PLANNED_WOOD,
         KEEP_INTERNAL_WOOD,
+        KEEP_UNOWNED_WOOD,
         PRUNE_UNPLANNED_BARE_TERMINAL
     }
 }

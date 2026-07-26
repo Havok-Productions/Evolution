@@ -25,7 +25,8 @@
  * <p>{@code TreeConstructorCore} in the parent package converts live
  * TreeEvolution state into this package's immutable decision model. The
  * {@code executor} package gives every phase exactly one file-level owner.
- * {@code TreeEvolutionFeature} supplies shared Folia-safe world operations,
- * then executes only the selected attachment.</p>
+ * {@code TreeConstructionRuntime} is the only hierarchy adapter. It delegates
+ * audit, maturity, transition, placement, and reproduction actions to their
+ * named services, then executes only the selected attachment.</p>
  */
 package org.evolution.features.treeevolution.constructor;

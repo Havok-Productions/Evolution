@@ -31,6 +31,13 @@ public final class TreeFocusPolicySmokeTest {
         require(!TreeFocusPolicy.transitionPending(
                         0, 0, true, false),
                 "a finalized complete tree must release transition focus");
+        require(TreeFocusPolicy.completeOwnershipRequired(
+                        0, 0, false, true, true, 6),
+                "an orphaned completed source crown must reacquire full ownership for cleanup");
+        require(!TreeFocusPolicy.completeOwnershipRequired(
+                        0, 0, false, false, true, 6),
+                "an incomplete target may keep building from compact known-DNA validation");
+
         require(TreeFocusPolicy.shouldFinalizeTransition(
                         true, 0, 0, true, 0),
                 "a complete tree must release a stale snapshot after its action allowance expires");
