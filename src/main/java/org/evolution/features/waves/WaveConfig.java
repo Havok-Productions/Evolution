@@ -40,6 +40,7 @@ final class WaveConfig {
     private final double minimumShoreFacing;
     // ## Per-player packet cap; shared world-front simulation is never viewer-limited.
     private final int maximumIncomingFrontsPerCoastAreaPerPlayer;
+    private final int maximumVisibleFrontsPerPlayer;
     private final int shorelineRunupDistance;
     private final int runupAdvanceTicksPerBlock;
     private final int runupRetreatTicksPerBlock;
@@ -78,6 +79,7 @@ final class WaveConfig {
             int fetchDistance,
             double minimumShoreFacing,
             int maximumIncomingFrontsPerCoastAreaPerPlayer,
+            int maximumVisibleFrontsPerPlayer,
             int shorelineRunupDistance,
             int runupAdvanceTicksPerBlock,
             int runupRetreatTicksPerBlock,
@@ -115,6 +117,7 @@ final class WaveConfig {
         this.fetchDistance = fetchDistance;
         this.minimumShoreFacing = minimumShoreFacing;
         this.maximumIncomingFrontsPerCoastAreaPerPlayer = maximumIncomingFrontsPerCoastAreaPerPlayer;
+        this.maximumVisibleFrontsPerPlayer = maximumVisibleFrontsPerPlayer;
         this.shorelineRunupDistance = shorelineRunupDistance;
         this.runupAdvanceTicksPerBlock = runupAdvanceTicksPerBlock;
         this.runupRetreatTicksPerBlock = runupRetreatTicksPerBlock;
@@ -170,6 +173,8 @@ final class WaveConfig {
                         config.getInt(
                                 "waves.shoreline-response.maximum-incoming-fronts-per-coast",
                                 3)))),
+                Math.max(1, Math.min(8, config.getInt(
+                        "waves.maximum-visible-fronts-per-player", 1))),
                 Math.max(1, config.getInt("waves.shoreline-runup.max-distance", 6)),
                 Math.max(1, config.getInt("waves.shoreline-runup.advance-ticks-per-block", 3)),
                 Math.max(1, config.getInt("waves.shoreline-runup.retreat-ticks-per-block", 5)),
@@ -209,6 +214,7 @@ final class WaveConfig {
     int fetchDistance() { return fetchDistance; }
     double minimumShoreFacing() { return minimumShoreFacing; }
     int maximumIncomingFrontsPerCoastAreaPerPlayer() { return maximumIncomingFrontsPerCoastAreaPerPlayer; }
+    int maximumVisibleFrontsPerPlayer() { return maximumVisibleFrontsPerPlayer; }
     int shorelineRunupDistance() { return shorelineRunupDistance; }
     int runupAdvanceTicksPerBlock() { return runupAdvanceTicksPerBlock; }
     int runupRetreatTicksPerBlock() { return runupRetreatTicksPerBlock; }
@@ -241,7 +247,9 @@ final class WaveConfig {
                 + "/" + packetReassertBudget + ", sticky=" + stickyVisualTicks
                 + ", cache-ttl=" + surfaceCacheTtlTicks + ", shore-response=" + shoreResponseDistance
                 + ", fetch=" + fetchDistance + ", minimum-facing=" + minimumShoreFacing
-                + ", coast-area-view-cap=" + maximumIncomingFrontsPerCoastAreaPerPlayer + ", runup=" + shorelineRunupEnabled
+                + ", coast-area-view-cap=" + maximumIncomingFrontsPerCoastAreaPerPlayer
+                + ", player-view-cap=" + maximumVisibleFrontsPerPlayer
+                + ", runup=" + shorelineRunupEnabled
                 + ", particles=" + particlesEnabled + ", boats=" + boatBobbingEnabled
                 + ", biome-filter=" + biomeFilterEnabled
                 + ", " + ovalSettings.summary() + ", testing=" + testingEnabled;

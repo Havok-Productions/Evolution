@@ -24,6 +24,7 @@ public final class EvolutionPlugin extends JavaPlugin {
     private FeatureRegistry featureRegistry;
     private ArchitecturePathDebug architecturePathDebug;
     private ResourceReporter resourceReporter;
+    private PlayerPlacedTreeBlockRegistry playerPlacedTreeBlocks;
     private PlantRegrowthFeature regrowthFeature;
     private MeadowGrowthFeature meadowFeature;
     private EcologyEvolutionFeature ecologyFeature;
@@ -62,6 +63,10 @@ public final class EvolutionPlugin extends JavaPlugin {
         architecturePathDebug.resetForStartup(this);
         resourceReporter = new ResourceReporter(this);
         resourceReporter.resetForStartup(this);
+        playerPlacedTreeBlocks = new PlayerPlacedTreeBlockRegistry(this);
+        playerPlacedTreeBlocks.load();
+        getServer().getPluginManager().registerEvents(
+                playerPlacedTreeBlocks, this);
         architecturePathDebug.trace(this, "core", "persistence.save-default-config", "config.yml");
         architecturePathDebug.trace(this, "core", "persistence.save-config", "config.yml defaults merged");
         architecturePathDebug.trace(this, "core", "plugin.enable.start", "default config saved and merged");
@@ -106,6 +111,9 @@ public final class EvolutionPlugin extends JavaPlugin {
             }
             if (featureRegistry != null) {
                 featureRegistry.disableAll();
+            }
+            if (playerPlacedTreeBlocks != null) {
+                playerPlacedTreeBlocks.saveNow("plugin-disable");
             }
             sample.workUnits(featureCount).detail("features=" + featureCount);
             pathDebug().trace(this, "core", "plugin.disable.done", "features disabled");
@@ -236,6 +244,10 @@ public final class EvolutionPlugin extends JavaPlugin {
 
     public PlantRegrowthFeature regrowthFeature() {
         return regrowthFeature;
+    }
+
+    public PlayerPlacedTreeBlockRegistry playerPlacedTreeBlocks() {
+        return playerPlacedTreeBlocks;
     }
 
     public MeadowGrowthFeature meadowFeature() {

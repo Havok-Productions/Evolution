@@ -1,5 +1,8 @@
 package org.evolution.features.treeevolution;
 
+import java.util.HashSet;
+import java.util.Set;
+
 final class TreeDnaNormalizer {
     NormalizedDna normalize(TreeDna dna) {
         return normalize(dna, TreeMaturityStage.ANCIENT);
@@ -7,7 +10,12 @@ final class TreeDnaNormalizer {
 
     NormalizedDna normalize(TreeDna dna, TreeMaturityStage maximumStage) {
         boolean giantStagesHeld = maximumStage.ordinal() < TreeMaturityStage.ANCIENT.ordinal();
-        boolean shapeRevisionChanged = dna.shapeRevision() < TreeDna.CURRENT_SHAPE_REVISION;
+        boolean shapeRevisionChanged = dna.shapeRevision()
+                < TreeDna.requiredShapeRevision(dna);
+        // ## Every planner-geometry revision enters cleanup explicitly. This
+        // prevents old owned wood/leaves from surviving beside a new target.
+        boolean shapeMigrationRequired = dna.shapeRevision() < 7
+                || shapeRevisionChanged;
         TreePersonality personality = normalizedPersonality(dna, giantStagesHeld);
         TreeRarity rarity = normalizedRarity(dna, giantStagesHeld);
         TreeMaturityStage stage = normalizedStage(dna, maximumStage);
@@ -58,6 +66,8 @@ final class TreeDnaNormalizer {
                 dna.baseY(),
                 dna.baseZ(),
                 dna.species(),
+                dna.variant(),
+                dna.sourcePattern(),
                 dna.seed(),
                 personality,
                 rarity,
@@ -86,8 +96,9 @@ final class TreeDnaNormalizer {
                 dna.profileSampleSource(),
                 dna.parentKey(),
                 dna.generation(),
-                TreeDna.CURRENT_SHAPE_REVISION,
-                stageDowngraded || shapeRevisionChanged
+                Math.max(dna.shapeRevision(),
+                        TreeDna.requiredShapeRevision(dna)),
+                stageDowngraded || shapeMigrationRequired
                         ? TreeGrowthIntent.CLEANUP
                         : normalizedIntent(dna.currentIntent(), stage),
                 changed ? 0 : dna.planCursor(),
@@ -95,11 +106,11 @@ final class TreeDnaNormalizer {
                 stageDowngraded ? 0 : Math.min(3, dna.blockedAttempts()),
                 Math.min(dna.lastIntentChangeAge(), dna.age()),
                 stageDowngraded ? 8
-                        : shapeRevisionChanged
+                        : shapeMigrationRequired
                                 ? Math.max(dna.stageCleanupBurst(), transitionCleanupBurst(stage))
                                 : Math.min(dna.stageCleanupBurst(), 8),
                 stageDowngraded ? 6
-                        : shapeRevisionChanged
+                        : shapeMigrationRequired
                                 ? Math.max(dna.stageGrowthBurst(), transitionGrowthBurst(stage))
                                 : Math.min(dna.stageGrowthBurst(), 12),
                 dna.age(),
@@ -109,9 +120,27 @@ final class TreeDnaNormalizer {
                 Math.min(8, dna.damageCount()),
                 dna.stumpPresent()
         );
-        // ## Normalization changes the future plan, never the persisted source
-        // evidence used to finish an already active canopy transition.
         normalized.copyTransitionLedgerFrom(dna);
+        if (shapeMigrationRequired
+                && !dna.hasOriginalShapeSnapshot()
+                && (!dna.evolvedShapeLogs().isEmpty()
+                        || !dna.evolvedShapeLeaves().isEmpty())) {
+            // ## A current-only tree from an older shape revision must become
+            // the immutable source for its migration. Starting cleanup bursts
+            // without this snapshot deadlocks at IMMUTABLE_SOURCE_SNAPSHOT;
+            // treating old leaves as source lets retained target cells be
+            // adopted while stale shelves remain traceable until pruning.
+            Set<String> migrationLeaves =
+                    new HashSet<>(dna.originalShapeLeaves());
+            migrationLeaves.addAll(dna.evolvedShapeLeaves());
+            normalized.restoreOriginalShape(
+                    dna.originalShapeLogs(),
+                    migrationLeaves,
+                    dna.retiredOriginalShapeLeaves(),
+                    dna.evolvedShapeLogs(),
+                    Set.of(),
+                    TreeTransitionLedger.CURRENT_OWNERSHIP_VERSION);
+        }
         return new NormalizedDna(normalized, true, summary(dna, normalized));
     }
 
@@ -211,7 +240,8 @@ final class TreeDnaNormalizer {
     }
 
     private int targetHeightFloor(TreeDna dna, TreeMaturityStage stage, TreePersonality personality, TreeRarity rarity) {
-        int base = TreeShapeProfile.targetHeightFloor(dna.species(), personality, rarity);
+        int base = TreeVariantPolicy.targetHeightFloor(
+                dna, personality, rarity);
         int stageFloor = switch (stage) {
             case SMALL -> Math.max(8, (int) Math.round(base * 0.42D));
             case MEDIUM -> Math.max(10, (int) Math.round(base * 0.68D));
@@ -336,6 +366,8 @@ final class TreeDnaNormalizer {
 
     private String summary(TreeDna before, TreeDna after) {
         return "shape-revision " + before.shapeRevision() + "->" + after.shapeRevision()
+                + ", variant " + before.variant().id()
+                + "->" + after.variant().id()
                 + ", personality " + before.personality() + "->" + after.personality()
                 + ", target-height " + before.targetHeight() + "->" + after.targetHeight()
                 + ", stage " + before.maturityStage() + "->" + after.maturityStage()

@@ -2,21 +2,29 @@ package org.evolution.features.treeevolution.constructor.executor;
 
 import java.util.Set;
 import org.evolution.features.treeevolution.constructor.TreeConstructionDecision;
-import org.evolution.features.treeevolution.constructor.TreeConstructionPhase;
+import org.evolution.features.treeevolution.constructor.TreeConstructionSubrule;
+import org.evolution.features.treeevolution.constructor.TreeConstructionAttachment;
 
 public final class OwnershipGateExecutor implements TreeConstructionExecutor {
     @Override
-    public Set<TreeConstructionPhase> phases() {
+    public Set<TreeConstructionSubrule> subrules() {
         return Set.of(
-                TreeConstructionPhase.WAIT_FOR_OWNERSHIP,
-                TreeConstructionPhase.WAIT_FOR_SOURCE_SNAPSHOT);
+                TreeConstructionSubrule.ROOTED_TREE_OWNERSHIP,
+                TreeConstructionSubrule.IMMUTABLE_SOURCE_SNAPSHOT);
+    }
+
+    @Override
+    public Set<TreeConstructionAttachment> attachments() {
+        return Set.of(TreeConstructionAttachment.OWNERSHIP_GATE,
+                TreeConstructionAttachment.SOURCE_SNAPSHOT);
     }
 
     @Override
     public TreeConstructionResult execute(
             TreeConstructionDecision decision,
             TreeConstructionOperations operations) {
-        return decision.phase() == TreeConstructionPhase.WAIT_FOR_OWNERSHIP
+        return decision.subrule()
+                == TreeConstructionSubrule.ROOTED_TREE_OWNERSHIP
                 ? operations.waitForOwnership()
                 : operations.waitForSourceSnapshot();
     }

@@ -7,12 +7,21 @@ public record TreeConstructionState(
         boolean ownershipComplete,
         boolean sourceSnapshotReady,
         boolean transitionPending,
+        boolean ownershipRoleReconciliationRemaining,
         boolean damageRepairRequested,
         boolean transitionBlockerReady,
+        boolean disconnectedEvolvedStructureRemaining,
+        boolean disconnectedTargetRepairRemaining,
+        boolean conflictingEvolvedTargetRemaining,
         boolean broadCleanupReady,
+        boolean obsoleteEvolvedStructureRemaining,
         boolean retiredCrownRemaining,
+        boolean sourceCrownResolved,
         int exposedUpperLogs,
         int uncoveredBranchTips,
+        int unplannedBareTerminals,
+        int staleEnvelopeLeaves,
+        int uncoveredPlannedBranchEnvelopes,
         double trunkProgress,
         double branchProgress,
         double canopyProgress,
@@ -25,6 +34,10 @@ public record TreeConstructionState(
     public TreeConstructionState {
         exposedUpperLogs = Math.max(0, exposedUpperLogs);
         uncoveredBranchTips = Math.max(0, uncoveredBranchTips);
+        unplannedBareTerminals = Math.max(0, unplannedBareTerminals);
+        staleEnvelopeLeaves = Math.max(0, staleEnvelopeLeaves);
+        uncoveredPlannedBranchEnvelopes = Math.max(
+                0, uncoveredPlannedBranchEnvelopes);
         trunkProgress = clamp(trunkProgress);
         branchProgress = clamp(branchProgress);
         canopyProgress = clamp(canopyProgress);

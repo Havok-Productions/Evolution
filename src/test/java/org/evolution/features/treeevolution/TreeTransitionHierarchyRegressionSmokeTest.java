@@ -16,7 +16,8 @@ public final class TreeTransitionHierarchyRegressionSmokeTest {
     public static void main(String[] args) {
         TreeDna dna = new TreeDna(
                 new UUID(0L, 0L), 0, 64, 0,
-                TreeSpecies.OAK, 91L,
+                TreeSpecies.OAK, TreeVariant.OAK_STANDARD,
+                TreeSourcePattern.unknown(), 91L,
                 TreePersonality.BALANCED, TreeRarity.COMMON,
                 18, 6, 2, 5, 0,
                 4, 4, 3, 4, 0.74D,
@@ -37,21 +38,26 @@ public final class TreeTransitionHierarchyRegressionSmokeTest {
                 new TreeGrowthQueuePolicy.Budget(1.0D, 1.0D, 1.0D);
         TreeConstructorCore core = new TreeConstructorCore();
 
-        TreeConstructionDecision ownership = core.decide(
+        TreeConstructionDecision ownership = core.decide(snapshot(
                 candidate(false), dna, complete, budget,
-                TreeGrowthIntent.CANOPY, 0, 0,
-                false, true, true);
+                false, true, true, false));
         require(ownership.subrule()
                         == TreeConstructionSubrule.ROOTED_TREE_OWNERSHIP,
                 "an unresolved orphan snapshot must reacquire full tree ownership");
 
-        TreeConstructionDecision cleanup = core.decide(
+        TreeConstructionDecision cleanup = core.decide(snapshot(
                 candidate(true), dna, complete, budget,
-                TreeGrowthIntent.CANOPY, 0, 0,
-                false, true, true);
+                false, true, true, false));
         require(cleanup.subrule()
                         == TreeConstructionSubrule.RETIRED_SOURCE_CROWN,
                 "an owned orphan snapshot must resume source-crown retirement");
+
+        TreeConstructionDecision unresolved = core.decide(snapshot(
+                candidate(true), dna, complete, budget,
+                false, false, true, false));
+        require(unresolved.subrule()
+                        == TreeConstructionSubrule.RETIRED_SOURCE_CROWN,
+                "an unresolved source crown must never finalize when its next safe leaf is temporarily unavailable");
 
         System.out.println(
                 "Tree transition hierarchy regression smoke test passed: "
@@ -63,6 +69,26 @@ public final class TreeTransitionHierarchyRegressionSmokeTest {
                 null, 0, 64, 0, 70, 7,
                 TreeSpecies.OAK, 7, 40, Set.of(),
                 ownershipComplete);
+    }
+
+    private static TreeConstructionSnapshot snapshot(
+            TreeCandidate candidate,
+            TreeDna dna,
+            TreeGrowthQueuePolicy.Completion completion,
+            TreeGrowthQueuePolicy.Budget budget,
+            boolean obsolete,
+            boolean retiredCrown,
+            boolean broadCleanup,
+            boolean sourceResolved
+    ) {
+        return TreeConstructionSnapshot.capture(
+                candidate, dna, completion, budget,
+                TreeGrowthIntent.CANOPY,
+                new TreeConstructionSnapshot.Facts(
+                        0, 0, 0, 0, 0,
+                        false, false, false, false, false,
+                        broadCleanup, obsolete, retiredCrown,
+                        sourceResolved));
     }
 
     private static void require(boolean condition, String message) {

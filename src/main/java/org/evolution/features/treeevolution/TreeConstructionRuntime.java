@@ -11,6 +11,7 @@ import org.bukkit.block.Biome;
 import org.evolution.coreparts.EvolutionPlugin;
 import org.evolution.coreparts.ResourceReporter.ReportSample;
 import org.evolution.features.treeevolution.constructor.TreeConstructionDecision;
+import org.evolution.features.treeevolution.constructor.TreeConstructionSubrule;
 import org.evolution.features.treeevolution.constructor.executor.TreeConstructionOperations;
 import org.evolution.features.treeevolution.constructor.executor.TreeConstructionResult;
 
@@ -32,6 +33,9 @@ final class TreeConstructionRuntime {
     private final TreeCanopyRepairService canopyRepairService;
     private final TreeTransitionService transitionService;
     private final TreeReproductionService reproductionService;
+    private final TreeConstructorPreflight preflight;
+    private final TreeCanopyIntegrityOperations canopyIntegrityOperations;
+    private final TreeTransitionConstructionOperations transitionOperations;
     private final BiPredicate<Location, TreeEvolutionConfig> canWorkAt;
     private final AtomicLong changedBlocks;
     private final TreeConstructorCore constructorCore = new TreeConstructorCore();
@@ -60,15 +64,50 @@ final class TreeConstructionRuntime {
         this.canopyRepairService = canopyRepairService;
         this.transitionService = transitionService;
         this.reproductionService = reproductionService;
+        this.preflight = new TreeConstructorPreflight(
+                plugin, diagnostics, repository, maturityService,
+                transitionService, reproductionService);
+        this.canopyIntegrityOperations = new TreeCanopyIntegrityOperations(
+                plugin, diagnostics, repository, planAudit,
+                maturityService, canopyRepairService,
+                transitionService);
+        this.transitionOperations = new TreeTransitionConstructionOperations(
+                plugin, diagnostics, repository, planAudit,
+                transitionService, changedBlocks);
         this.canWorkAt = canWorkAt;
         this.changedBlocks = changedBlocks;
     }
-    boolean evolve(TreeCandidate candidate, TreeDna dna, TreeEvolutionConfig currentConfig) {
+    TreeConstructionResult evolve(
+            TreeCandidate candidate,
+            TreeDna dna,
+            TreeEvolutionConfig currentConfig) {
         try (ReportSample sample = plugin.resourceReporter().begin("tree-evolution", "action.evolve")) {
             if (!dna.stumpPresent()) {
                 diagnostics.recordReject(currentConfig, "missing-stump", dna.key());
                 sample.detail("missing-stump " + dna.key());
-                return false;
+                return TreeConstructionResult.idle(
+                        "preflight.missing-stump " + dna.key());
+            }
+            if (!TreeCandidateBindingPolicy.isCanonical(candidate, dna)) {
+                // ## This is the final safety boundary. The focus scheduler
+                // must canonicalize discovery aliases before the constructor
+                // sees them; continuing here would evaluate ownership from one
+                // stump while mutating another tree's persisted plan.
+                diagnostics.recordReject(
+                        currentConfig,
+                        "candidate-dna-mismatch",
+                        "candidate=" + candidate.baseKey()
+                                + " dna=" + dna.key());
+                plugin.pathDebug().failure(
+                        plugin,
+                        "tree-evolution",
+                        "candidate-dna-mismatch",
+                        "candidate=" + candidate.baseKey()
+                                + " dna=" + dna.key()
+                                + " ## constructor stopped before world mutation");
+                sample.detail("candidate-dna-mismatch " + dna.key());
+                return TreeConstructionResult.idle(
+                        "preflight.candidate-dna-mismatch " + dna.key());
             }
             if (candidate.baseBlock().getType() != dna.species().logMaterial()) {
                 dna.setStumpPresent(false);
@@ -76,48 +115,85 @@ final class TreeConstructionRuntime {
                 repository.save(currentConfig);
                 diagnostics.recordReject(currentConfig, "base-not-log", format(candidate.baseBlock()));
                 sample.detail("base-not-log " + dna.key());
-                return false;
+                return TreeConstructionResult.logicalProgress(
+                        "preflight.base-not-log " + dna.key());
             }
             if (!canWorkAt.test(candidate.baseLocation(), currentConfig)) {
                 diagnostics.recordReject(currentConfig, "work-gate", format(candidate.baseLocation()));
                 sample.detail("work-gate " + dna.key());
-                return false;
+                return TreeConstructionResult.idle(
+                        "preflight.work-gate " + dna.key());
             }
-            boolean sourceCaptureRequired =
-                    (!dna.hasOriginalShapeSnapshot()
-                            && (dna.age() == 0 || dna.hasStageBurst()))
-                    || (dna.hasOriginalShapeSnapshot()
-                            && !dna.originalShapeCaptureIsCurrent());
-            if (sourceCaptureRequired
-                    && !maturityService.ensureOriginalShapeSnapshot(candidate, dna,
-                            "before-world-change")) {
+            TreeConstructorPreflight.SourceResult sourcePreflight;
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "tree-evolution", "phase.preflight-source")) {
+                sourcePreflight = preflight.prepareSource(
+                        candidate, dna, currentConfig);
+                phase.workUnits(candidate.connectedLogs()
+                                + candidate.connectedLeaves())
+                        .detail(dna.key());
+            }
+            if (!sourcePreflight.ready()) {
                 sample.detail("original-shape-wait " + dna.key());
-                return false;
+                return TreeConstructionResult.idle(
+                        "preflight." + sourcePreflight.detail() + " "
+                                + dna.key());
             }
-            maturityService.reconcileStageWithSourceHeight(candidate, dna, currentConfig);
+            boolean preflightProgress = sourcePreflight.progressed();
 
         // ## TREE CONSTRUCTOR CORE
         // The feature gathers one immutable live snapshot, the hierarchy selects one
         // attached subsystem, and only that subsystem may change the tree this action.
         Biome biome = candidate.baseBlock().getBiome();
-        CachedTreePlan cachedPlan = planAudit.cachedPlan(
-                dna, biome, currentConfig.rootsEnabled());
-        TreeGrowthIntent requestedIntent = refreshIntent(
-                candidate, dna, currentConfig);
-        diagnostics.recordPlan(currentConfig, dna, cachedPlan.plan(),
-                cachedPlan.orderedBlocks(), candidate.world(), false);
+        CachedTreePlan cachedPlan;
+        try (ReportSample phase = plugin.resourceReporter().begin(
+                "tree-evolution", "phase.plan-load")) {
+            cachedPlan = planAudit.cachedPlan(
+                    dna, biome, currentConfig.rootsEnabled());
+            phase.workUnits(cachedPlan.orderedBlocks().size())
+                    .detail(dna.species().id() + " " + dna.variant().id());
+        }
+        TreeConstructorPreflight.IntentResult initialIntent =
+                preflight.selectIntent(candidate, dna, currentConfig);
+        TreeGrowthIntent requestedIntent = initialIntent.intent();
+        preflightProgress |= initialIntent.progressed();
+        try (ReportSample phase = plugin.resourceReporter().begin(
+                "tree-evolution", "phase.diagnostics-plan")) {
+            diagnostics.recordPlan(currentConfig, dna, cachedPlan.plan(),
+                    cachedPlan.orderedBlocks(), candidate.world(), false);
+            phase.workUnits(cachedPlan.orderedBlocks().size())
+                    .detail(dna.key());
+        }
 
-        TreeGrowthQueuePolicy.Completion constructorCompletion =
-                planAudit.stageCompletion(candidate, dna, cachedPlan);
+        TreeGrowthQueuePolicy.Completion constructorCompletion;
         TreeGrowthQueuePolicy.Budget constructorBudget =
                 TreeGrowthQueuePolicy.stageBudget(dna);
-        int constructorExposedLogs = planAudit.exposedUpperLogCount(
-                candidate, dna, cachedPlan.blocksByKey());
-        BranchTipCoverage constructorBranchTips = planAudit.branchTipCoverage(
-                candidate, dna, cachedPlan);
+        int constructorExposedLogs;
+        BranchTipCoverage constructorBranchTips;
+        try (ReportSample phase = plugin.resourceReporter().begin(
+                "tree-evolution", "phase.live-plan-audit")) {
+            constructorCompletion = planAudit.stageCompletion(
+                    candidate, dna, cachedPlan);
+            constructorExposedLogs = planAudit.exposedUpperLogCount(
+                    candidate, dna, cachedPlan.blocksByKey());
+            constructorBranchTips = planAudit.branchTipCoverage(
+                    candidate, dna, cachedPlan);
+            phase.workUnits(cachedPlan.orderedBlocks().size())
+                    .detail(dna.key());
+        }
         boolean constructorStageComplete = TreeFocusPolicy.stageStructureComplete(
                 constructorCompletion, constructorBudget,
                 constructorExposedLogs, constructorBranchTips.uncoveredTips());
+        boolean constructorTargetVoxelsComplete =
+                TreeFocusPolicy.targetVoxelsComplete(
+                        constructorCompletion, constructorBudget);
+        TreeConstructorPreflight.IntentResult normalizedIntent =
+                preflight.normalizeStaleDamage(
+                        dna, requestedIntent,
+                        constructorTargetVoxelsComplete,
+                        currentConfig);
+        requestedIntent = normalizedIntent.intent();
+        preflightProgress |= normalizedIntent.progressed();
         boolean constructorNeedsCompleteOwnership =
                 TreeFocusPolicy.completeOwnershipRequired(
                         dna.stageCleanupBurst(),
@@ -126,26 +202,53 @@ final class TreeConstructionRuntime {
                         constructorStageComplete,
                         dna.hasOriginalShapeSnapshot(),
                         dna.unresolvedOriginalShapeLeafCount());
-        if (constructorNeedsCompleteOwnership && !candidate.ownershipComplete()) {
-            candidate = candidateDiscovery.build(candidate.baseBlock(), true)
-                    .orElse(candidate);
-            constructorCompletion = planAudit.stageCompletion(
-                    candidate, dna, cachedPlan);
-            constructorExposedLogs = planAudit.exposedUpperLogCount(
-                    candidate, dna, cachedPlan.blocksByKey());
-            constructorBranchTips = planAudit.branchTipCoverage(
-                    candidate, dna, cachedPlan);
+        boolean obsoleteEvolvedReceipt =
+                transitionService.hasObsoleteEvolvedReceipt(
+                        dna, cachedPlan);
+        if ((constructorNeedsCompleteOwnership || obsoleteEvolvedReceipt)
+                && !candidate.ownershipComplete()) {
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "tree-evolution", "phase.complete-ownership-rescan")) {
+                candidate = candidateDiscovery.build(
+                                candidate.baseBlock(), true)
+                        .orElse(candidate);
+                constructorCompletion = planAudit.stageCompletion(
+                        candidate, dna, cachedPlan);
+                constructorExposedLogs = planAudit.exposedUpperLogCount(
+                        candidate, dna, cachedPlan.blocksByKey());
+                constructorBranchTips = planAudit.branchTipCoverage(
+                        candidate, dna, cachedPlan);
+                phase.workUnits(candidate.connectedLogs()
+                                + candidate.connectedLeaves())
+                        .detail(dna.key());
+            }
             constructorStageComplete = TreeFocusPolicy.stageStructureComplete(
                     constructorCompletion, constructorBudget,
                     constructorExposedLogs, constructorBranchTips.uncoveredTips());
         }
-        transitionService.reconcileSourceLeafLedger(
-                candidate, dna, cachedPlan, currentConfig);
+        TreeTransitionService.NeighborProtection neighborProtection;
+        try (ReportSample phase = plugin.resourceReporter().begin(
+                "tree-evolution", "phase.neighbor-plan-protection")) {
+            neighborProtection = transitionService.neighborProtection(
+                    candidate, dna, currentConfig);
+            phase.workUnits(neighborProtection.plannedBlocks())
+                    .detail("tree=" + dna.key()
+                            + " nearby=" + neighborProtection.nearbyTrees()
+                            + " body=" + neighborProtection.bodyKeys().size()
+                            + " canopy="
+                            + neighborProtection.canopyKeys().size());
+        }
+        preflightProgress |= preflight.reconcileSourceLedger(
+                candidate, dna, cachedPlan, currentConfig,
+                neighborProtection);
         boolean transitionPending = TreeFocusPolicy.transitionPending(
                 dna.stageCleanupBurst(), dna.stageGrowthBurst(),
                 constructorStageComplete, dna.hasOriginalShapeSnapshot());
         boolean transitionCleanupRequired = transitionPending
                 && dna.unresolvedOriginalShapeLeafCount() > 0;
+        boolean cleanupTurnReady = constructorCompletion.canopyPercent()
+                >= constructorBudget.canopyPercent()
+                || dna.consecutivePrunes() < 2;
         boolean broadCleanupReady =
                 TreeCanopyTransitionPolicy.allowsBroadCleanup(
                         dna, constructorCompletion.canopyPercent())
@@ -153,27 +256,111 @@ final class TreeConstructionRuntime {
                         >= constructorBudget.trunkPercent()
                 && constructorCompletion.branchPercent()
                         >= constructorBudget.branchPercent()
-                && constructorCompletion.canopyPercent()
-                        >= constructorBudget.canopyPercent();
-        Optional<PlannedTarget> transitionBlocker =
-                transitionCleanupRequired && candidate.ownershipComplete()
-                        ? transitionService.readyTransitionBlocker(
-                                candidate, dna, cachedPlan, currentConfig)
-                        : Optional.empty();
-        List<Block> retiredCrown =
-                transitionCleanupRequired
-                                && candidate.ownershipComplete()
-                                && broadCleanupReady
-                        ? transitionService.findRetiredCanopyLeaves(
-                                candidate, dna, cachedPlan,
-                                planAudit.pruneBatchSize(dna), currentConfig)
-                        : List.of();
-        TreeConstructionDecision construction = constructorCore.decide(
-                candidate, dna, constructorCompletion, constructorBudget,
-                requestedIntent, constructorExposedLogs,
-                constructorBranchTips.uncoveredTips(),
-                transitionBlocker.isPresent(), broadCleanupReady,
-                dna.unresolvedOriginalShapeLeafCount() > 0);
+                && cleanupTurnReady;
+        Optional<PlannedTarget> transitionBlocker;
+        List<Block> retiredCrown;
+        Optional<TreeOwnershipRoleReconciliationPolicy.Repair>
+                ownershipRoleRepair;
+        TreeTransitionService.DisconnectedEvolvedState
+                disconnectedState;
+        Optional<TreeTransitionService.ObsoleteEvolvedBlock>
+                disconnectedEvolvedStructure;
+        Optional<TreeTransitionService.ObsoleteEvolvedBlock>
+                conflictingEvolvedStructure;
+        Optional<TreeTransitionService.ObsoleteEvolvedBlock>
+                conflictSafeRetirement;
+        Optional<TreeTransitionService.ObsoleteEvolvedBlock>
+                obsoleteEvolvedStructure;
+        try (ReportSample phase = plugin.resourceReporter().begin(
+                "tree-evolution", "phase.transition-reconciliation")) {
+            transitionBlocker = transitionCleanupRequired
+                            && candidate.ownershipComplete()
+                    ? transitionService.readyTransitionBlocker(
+                            candidate, dna, cachedPlan, currentConfig,
+                            neighborProtection)
+                    : Optional.empty();
+            retiredCrown = transitionCleanupRequired
+                            && candidate.ownershipComplete()
+                            && broadCleanupReady
+                    ? transitionService.findRetiredCanopyLeaves(
+                            candidate, dna, cachedPlan,
+                            planAudit.pruneBatchSize(dna), currentConfig,
+                            neighborProtection)
+                    : List.of();
+            ownershipRoleRepair = transitionService.findOwnershipRoleRepair(
+                    candidate, dna, cachedPlan, currentConfig);
+            disconnectedState = transitionService.findDisconnectedEvolvedState(
+                    candidate, dna, cachedPlan, currentConfig,
+                    neighborProtection);
+            disconnectedEvolvedStructure = disconnectedState.obsolete();
+            conflictingEvolvedStructure =
+                    transitionService.findConflictingEvolvedTargetBlock(
+                            candidate, dna, cachedPlan, currentConfig,
+                            neighborProtection);
+            conflictSafeRetirement = conflictingEvolvedStructure.isPresent()
+                    ? transitionService.findConflictSafeRetirement(
+                            candidate, dna, cachedPlan, currentConfig,
+                            conflictingEvolvedStructure.get(),
+                            neighborProtection)
+                    : Optional.empty();
+            obsoleteEvolvedStructure = broadCleanupReady
+                            && candidate.ownershipComplete()
+                    ? transitionService.findObsoleteEvolvedBlock(
+                            candidate, dna, cachedPlan, currentConfig,
+                            neighborProtection)
+                    : Optional.empty();
+            phase.workUnits(dna.evolvedLogCount()
+                            + dna.evolvedLeafCount()
+                            + cachedPlan.orderedBlocks().size())
+                    .detail(dna.key());
+        }
+        TreeConstructionSnapshot constructorSnapshot =
+                TreeConstructionSnapshot.capture(
+                        candidate, dna, constructorCompletion,
+                        constructorBudget, requestedIntent,
+                        new TreeConstructionSnapshot.Facts(
+                                constructorExposedLogs,
+                                constructorBranchTips.uncoveredTips(),
+                                constructorBranchTips.unplannedBareTips(),
+                                constructorBranchTips
+                                        .stalePersistentEnvelopeLeaves(),
+                                constructorBranchTips
+                                        .uncoveredPlannedEnvelopes(),
+                                transitionBlocker.isPresent(),
+                                ownershipRoleRepair.isPresent(),
+                                disconnectedEvolvedStructure.isPresent(),
+                                disconnectedState.targetRepairRequired(),
+                                conflictSafeRetirement.isPresent(),
+                                broadCleanupReady,
+                                obsoleteEvolvedStructure.isPresent(),
+                                !retiredCrown.isEmpty(),
+                                dna.unresolvedOriginalShapeLeafCount() <= 0));
+        TreeConstructionDecision construction;
+        try (ReportSample phase = plugin.resourceReporter().begin(
+                "tree-evolution", "phase.hierarchy-decision")) {
+            construction = constructorCore.decide(constructorSnapshot);
+            phase.detail(construction.marker());
+        }
+        if ((construction.subrule()
+                        == TreeConstructionSubrule
+                                .DISCONNECTED_TARGET_REPAIR
+                || construction.subrule()
+                        == TreeConstructionSubrule
+                                .OWNERSHIP_ROLE_RECONCILIATION
+                || construction.subrule()
+                        == TreeConstructionSubrule
+                                .DISCONNECTED_EVOLVED_STRUCTURE
+                || construction.subrule()
+                        == TreeConstructionSubrule
+                                .CONFLICTING_EVOLVED_TARGET
+                || construction.subrule()
+                        == TreeConstructionSubrule
+                                .OBSOLETE_EVOLVED_STRUCTURE)
+                && diagnostics.recordBlockedConstructorEnvironment(
+                        currentConfig, dna, cachedPlan.plan(),
+                        cachedPlan.orderedBlocks(), candidate.world())) {
+            diagnostics.saveSoon(plugin, currentConfig);
+        }
         plugin.pathDebug().traceSampled(
                 plugin, "tree-evolution",
                 construction.finalAudit().passed()
@@ -187,9 +374,25 @@ final class TreeConstructionRuntime {
                         + " detail=" + construction.finalAudit().detail()
                         + " ## final audit independently rechecks every smaller constructor contract");
         String executorName = constructorCore.executorName(construction);
-        diagnostics.recordConstructorDecision(
+        TreeConstructorStageTimeline.Boundary constructorStageBoundary =
+                diagnostics.recordConstructorDecision(
                 currentConfig, dna, construction,
                 constructorCompletion, constructorBudget, executorName);
+        if (constructorStageBoundary.changed()) {
+            // ## The expensive 3D world overlay is captured only when the
+            // hierarchy changes smoke tags, not for every one-block action.
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "tree-evolution", "phase.diagnostics-stage-frame")) {
+                diagnostics.recordConstructorStageFrames(
+                        currentConfig, dna, constructorStageBoundary,
+                        cachedPlan.plan(), cachedPlan.orderedBlocks(),
+                        candidate.world());
+                phase.workUnits(cachedPlan.orderedBlocks().size())
+                        .detail(dna.key() + " frames="
+                                + constructorStageBoundary.frames().size());
+            }
+            diagnostics.saveSoon(plugin, currentConfig);
+        }
         plugin.pathDebug().traceSampled(
                 plugin, "tree-evolution", "constructor.phase",
                 construction.marker() + " tree=" + dna.key()
@@ -211,16 +414,29 @@ final class TreeConstructionRuntime {
             }
 
             @Override
-            public TreeConstructionResult repair() {
+            public TreeConstructionResult reconcileOwnershipRole() {
+                return transitionOperations.reconcileOwnershipRole(
+                        dna, currentConfig, ownershipRoleRepair);
+            }
+
+            @Override
+            public TreeConstructionResult repairDisconnectedTarget() {
+                return transitionOperations.repairDisconnectedTarget(
+                        constructionCandidate, dna, currentConfig,
+                        disconnectedState.targetRepair().repair());
+            }
+
+            @Override
+            public TreeConstructionResult repairInterruptedDamage() {
                 return executeIntentConstruction(
                         constructionCandidate, dna, cachedPlan,
                         currentConfig, TreeGrowthIntent.REPAIR,
-                        constructionRequestedIntent);
+                        constructionRequestedIntent, construction);
             }
 
             @Override
             public TreeConstructionResult replaceTransitionBlocker() {
-                return executeTransitionBlockerPhase(
+                return transitionOperations.replaceBlocker(
                         constructionCandidate, dna, cachedPlan,
                         currentConfig, transitionBlocker);
             }
@@ -230,15 +446,43 @@ final class TreeConstructionRuntime {
                 return executeIntentConstruction(
                         constructionCandidate, dna, cachedPlan,
                         currentConfig, TreeGrowthIntent.HEIGHT,
-                        constructionRequestedIntent);
+                        constructionRequestedIntent, construction);
             }
 
             @Override
-            public TreeConstructionResult buildCanopyShell() {
+            public TreeConstructionResult coverExposedSupport() {
+                return canopyIntegrityOperations.coverExposedSupport(
+                        constructionCandidate, dna, cachedPlan,
+                        currentConfig);
+            }
+
+            @Override
+            public TreeConstructionResult retireUnplannedBareTerminal() {
+                return canopyIntegrityOperations.retireUnplannedBareTerminal(
+                        constructionCandidate, dna, cachedPlan,
+                        currentConfig);
+            }
+
+            @Override
+            public TreeConstructionResult retireStaleEnvelopeLeaf() {
+                return canopyIntegrityOperations.retireStaleEnvelopeLeaf(
+                        constructionCandidate, dna, cachedPlan,
+                        currentConfig);
+            }
+
+            @Override
+            public TreeConstructionResult repairBranchEnvelope() {
+                return canopyIntegrityOperations.repairBranchEnvelope(
+                        constructionCandidate, dna, cachedPlan,
+                        currentConfig);
+            }
+
+            @Override
+            public TreeConstructionResult buildMinimumCrownShell() {
                 return executeIntentConstruction(
                         constructionCandidate, dna, cachedPlan,
                         currentConfig, TreeGrowthIntent.CANOPY,
-                        constructionRequestedIntent);
+                        constructionRequestedIntent, construction);
             }
 
             @Override
@@ -246,7 +490,7 @@ final class TreeConstructionRuntime {
                 return executeIntentConstruction(
                         constructionCandidate, dna, cachedPlan,
                         currentConfig, TreeGrowthIntent.BRANCH,
-                        constructionRequestedIntent);
+                        constructionRequestedIntent, construction);
             }
 
             @Override
@@ -254,19 +498,42 @@ final class TreeConstructionRuntime {
                 return executeIntentConstruction(
                         constructionCandidate, dna, cachedPlan,
                         currentConfig, TreeGrowthIntent.CANOPY,
-                        constructionRequestedIntent);
+                        constructionRequestedIntent, construction);
             }
 
             @Override
-            public TreeConstructionResult pruneRetiredCrown() {
-                return executeRetiredCrownPhase(
-                        dna, currentConfig, construction,
-                        retiredCrown);
+            public TreeConstructionResult retireDisconnectedEvolvedStructure() {
+                return transitionOperations.retireEvolvedStructure(
+                        dna, cachedPlan, currentConfig,
+                        disconnectedEvolvedStructure,
+                        "disconnected-evolved");
+            }
+
+            @Override
+            public TreeConstructionResult retireConflictingEvolvedTarget() {
+                return transitionOperations.retireEvolvedStructure(
+                        dna, cachedPlan, currentConfig,
+                        conflictSafeRetirement,
+                        "target-role-conflict");
+            }
+
+            @Override
+            public TreeConstructionResult retireObsoleteEvolvedStructure() {
+                return transitionOperations.retireEvolvedStructure(
+                        dna, cachedPlan, currentConfig,
+                        obsoleteEvolvedStructure,
+                        "obsolete-evolved");
+            }
+
+            @Override
+            public TreeConstructionResult retireSourceCrown() {
+                return transitionOperations.retireSourceCrown(
+                        dna, currentConfig, construction, retiredCrown);
             }
 
             @Override
             public TreeConstructionResult finalizeTransition() {
-                return executeTransitionFinalizer(
+                return transitionOperations.finalizeTransition(
                         constructionCandidate, dna, currentConfig,
                         construction);
             }
@@ -281,7 +548,7 @@ final class TreeConstructionRuntime {
                 return executeIntentConstruction(
                         constructionCandidate, dna, cachedPlan,
                         currentConfig, detailIntent,
-                        constructionRequestedIntent);
+                        constructionRequestedIntent, construction);
             }
 
             @Override
@@ -302,14 +569,25 @@ final class TreeConstructionRuntime {
             executorSample.changedUnits(result.changedUnits())
                     .detail(executorName + " " + result.detail());
         }
+        try (ReportSample phase = plugin.resourceReporter().begin(
+                "tree-evolution", "phase.diagnostics-completion-frame")) {
+            diagnostics.recordConstructorCompletionFrame(
+                    currentConfig, dna, construction,
+                    cachedPlan.plan(), cachedPlan.orderedBlocks(),
+                    candidate.world());
+            phase.workUnits(cachedPlan.orderedBlocks().size())
+                    .detail(dna.key() + " " + construction.subrule());
+        }
         plugin.pathDebug().traceSampled(plugin, "tree-evolution",
                 "constructor.executor",
                 construction.marker() + " executor=" + executorName
+                        + " progressed=" + result.progressed()
                         + " changed=" + result.worldChanged()
                         + " units=" + result.changedUnits()
                         + " detail=" + result.detail());
         sample.changedUnits(result.changedUnits()).detail(result.detail());
-        return result.worldChanged();
+        return result.withPriorLogicalProgress(
+                preflightProgress, "constructor.preflight");
         }
     }
 
@@ -326,96 +604,6 @@ final class TreeConstructionRuntime {
                         + " reason=" + construction.reason());
         return TreeConstructionResult.idle(
                 "constructor.wait-" + gate + " " + dna.key());
-    }
-
-    private TreeConstructionResult executeTransitionBlockerPhase(
-            TreeCandidate candidate,
-            TreeDna dna,
-            CachedTreePlan cachedPlan,
-            TreeEvolutionConfig currentConfig,
-            Optional<PlannedTarget> transitionBlocker
-    ) {
-        if (transitionBlocker.isPresent()
-                && transitionService.replaceTransitionBlocker(
-                        candidate, dna, cachedPlan, currentConfig,
-                        transitionBlocker.get())) {
-            return TreeConstructionResult.changed(
-                    1, "constructor.atomic-blocker " + dna.key());
-        }
-        diagnostics.recordReject(currentConfig,
-                "constructor-blocker-lost", dna.key());
-        return TreeConstructionResult.idle(
-                "constructor.blocker-lost " + dna.key());
-    }
-
-    private TreeConstructionResult executeRetiredCrownPhase(
-            TreeDna dna,
-            TreeEvolutionConfig currentConfig,
-            TreeConstructionDecision construction,
-            List<Block> retiredCrown
-    ) {
-        if (retiredCrown.isEmpty()) {
-            diagnostics.recordReject(currentConfig,
-                    "constructor-retired-crown-empty",
-                    dna.key() + " unresolved-source-leaves="
-                            + dna.unresolvedOriginalShapeLeafCount());
-            plugin.pathDebug().traceSampled(plugin, "tree-evolution",
-                    "gate.source-leaf-unresolved",
-                    "tree=" + dna.key()
-                            + " unresolved="
-                            + dna.unresolvedOriginalShapeLeafCount()
-                            + " ## the source snapshot remains open; no unresolved leaf may be forgotten by transition finalization");
-            return TreeConstructionResult.idle(
-                    "constructor.retired-crown-empty " + dna.key());
-        }
-        Block leaf = retiredCrown.get(0);
-        String retiredLeafKey = keyFor(leaf);
-        if (!dna.markOriginalShapeLeafRetired(retiredLeafKey)) {
-            diagnostics.recordReject(currentConfig,
-                    "constructor-retired-leaf-already-processed",
-                    dna.key() + " leaf=" + format(leaf));
-            return TreeConstructionResult.idle(
-                    "constructor.retired-leaf-already-processed "
-                            + dna.key());
-        }
-        leaf.setType(Material.AIR, false);
-        dna.markPrunedNow();
-        repository.markDirty("retired source leaf " + retiredLeafKey);
-                planAudit.invalidateLiveAnalysis(dna.key());
-        changedBlocks.incrementAndGet();
-        diagnostics.recordPrunedBatch(
-                plugin, currentConfig, List.of(leaf), dna);
-        plugin.pathDebug().trace(plugin, "tree-evolution",
-                "constructor.prune-retired-crown",
-                construction.marker() + " tree=" + dna.key()
-                        + " removed=" + format(leaf)
-                        + " ## broad pruning runs only after the replacement structure reaches every stage target");
-        return TreeConstructionResult.changed(
-                1, "constructor.prune-retired-crown " + dna.key());
-    }
-
-    private TreeConstructionResult executeTransitionFinalizer(
-            TreeCandidate candidate,
-            TreeDna dna,
-            TreeEvolutionConfig currentConfig,
-            TreeConstructionDecision construction
-    ) {
-        int originalBlocks = dna.originalShapeBlockCount();
-        dna.completeStageCleanup();
-        TreeGrowthIntent nextIntent = dna.stageGrowthBurst() > 0
-                ? TreeGrowthIntentPolicy.stageBurstIntent(candidate, dna)
-                : TreeGrowthIntent.CANOPY;
-        dna.setCurrentIntent(nextIntent);
-        repository.markDirty("constructor transition cleanup complete "
-                + dna.key());
-        repository.save(currentConfig);
-        plugin.pathDebug().trace(plugin, "tree-evolution",
-                "constructor.transition-finalize",
-                construction.marker() + " tree=" + dna.key()
-                        + " source-blocks=" + originalBlocks
-                        + " next=" + nextIntent);
-        return TreeConstructionResult.idle(
-                "constructor.transition-finalize " + dna.key());
     }
 
     private TreeConstructionResult executeConstructorComplete(
@@ -435,8 +623,11 @@ final class TreeConstructionRuntime {
                 construction.marker() + " tree=" + dna.key()
                         + " stage=" + before + "->" + dna.maturityStage()
                         + " ## no structural planner runs after the current stage contract is complete");
-        return TreeConstructionResult.idle(
-                "constructor.complete " + dna.key());
+        return dna.maturityStage() != before
+                ? TreeConstructionResult.logicalProgress(
+                        "constructor.complete stage-advanced " + dna.key())
+                : TreeConstructionResult.idle(
+                        "constructor.complete " + dna.key());
     }
 
     private TreeConstructionResult executeIntentConstruction(
@@ -445,7 +636,8 @@ final class TreeConstructionRuntime {
             CachedTreePlan cachedPlan,
             TreeEvolutionConfig currentConfig,
             TreeGrowthIntent intent,
-            TreeGrowthIntent requestedIntent
+            TreeGrowthIntent requestedIntent,
+            TreeConstructionDecision construction
     ) {
         if (intent != dna.currentIntent()) {
             dna.setCurrentIntent(intent);
@@ -466,89 +658,12 @@ final class TreeConstructionRuntime {
                     1, "seedling.spread " + dna.key());
         }
 
-        if (intent == TreeGrowthIntent.CANOPY) {
-            BranchTipCoverage branchTips = planAudit.branchTipCoverage(
-                    candidate, dna, cachedPlan);
-            if (branchTips.firstUnplannedBareTip() != null
-                    && planAudit.pruneUnplannedBareTerminal(
-                            candidate, dna, cachedPlan, currentConfig,
-                            branchTips.firstUnplannedBareTip())) {
-                dna.markPlacedForIntent(intent, dna.planCursor());
-                repository.markDirty("stale-terminal-log-retired " + dna.key());
-                repository.save(currentConfig);
-                planAudit.invalidateLiveAnalysis(dna.key());
-                maturityService.updateMaturity(candidate, dna, currentConfig);
-                return TreeConstructionResult.changed(
-                        1, "prune.unplanned-bare-terminal " + dna.key());
-            }
-            if (branchTips.firstStalePersistentEnvelopeLeaf() != null
-                    && planAudit.pruneStalePersistentEnvelopeLeaf(
-                            candidate, dna, cachedPlan, currentConfig,
-                            branchTips.firstStalePersistentEnvelopeLeaf())) {
-                dna.markPlacedForIntent(intent, dna.planCursor());
-                planAudit.invalidateLiveAnalysis(dna.key());
-                maturityService.updateMaturity(candidate, dna, currentConfig);
-                return TreeConstructionResult.changed(
-                        1, "prune.stale-persistent-envelope-leaf "
-                                + dna.key());
-            }
-            Optional<Block> exposedLog = canopyRepairService.findExposedUpperLog(
-                    candidate, dna, cachedPlan.blocksByKey());
-            if (exposedLog.isPresent()) {
-                int liftedLeaves = canopyRepairService.coverExposedLog(
-                        candidate, dna, currentConfig,
-                        exposedLog.get(), cachedPlan.blocksByKey());
-                if (liftedLeaves > 0) {
-                    dna.markPlacedForIntent(intent, dna.planCursor());
-                    dna.consumeStageGrowthBurst();
-                planAudit.invalidateLiveAnalysis(dna.key());
-                    maturityService.updateMaturity(candidate, dna, currentConfig);
-                    plugin.pathDebug().trace(plugin, "tree-evolution",
-                            "shape.integrity.canopy-cover",
-                            "tree=" + dna.key()
-                                    + " trunk=" + format(exposedLog.get())
-                                    + " leaves=" + liftedLeaves
-                                    + " ## canopy shell corrected an exposed live upper trunk before normal target selection");
-                    return TreeConstructionResult.changed(
-                            liftedLeaves,
-                            "canopy.integrity-cover " + dna.key());
-                }
-            }
-            if (branchTips.firstUncoveredTip() != null) {
-                int attachedLeaves = canopyRepairService.coverBranchTip(
-                        candidate, dna, currentConfig,
-                        branchTips.firstUncoveredTip(),
-                        branchTips.firstRequiredContacts(),
-                        branchTips.firstRequiredCluster(),
-                        cachedPlan.blocksByKey());
-                if (attachedLeaves > 0) {
-                    dna.markPlacedForIntent(intent, dna.planCursor());
-                    dna.consumeStageGrowthBurst();
-                planAudit.invalidateLiveAnalysis(dna.key());
-                    maturityService.updateMaturity(candidate, dna, currentConfig);
-                    plugin.pathDebug().trace(plugin, "tree-evolution",
-                            "shape.integrity.branch-tip-cover",
-                            "tree=" + dna.key()
-                                    + " tip="
-                                    + format(branchTips.firstUncoveredTip())
-                                    + " leaves=" + attachedLeaves
-                                    + " target-contacts="
-                                    + branchTips.firstRequiredContacts()
-                                    + " target-envelope="
-                                    + branchTips.firstRequiredCluster()
-                                    + " ## a protruding terminal limb builds its preplanned connected leaf envelope before general canopy fill");
-                    return TreeConstructionResult.changed(
-                            attachedLeaves,
-                            "canopy.branch-tip-cover " + dna.key());
-                }
-            }
-        }
-
         Optional<PlannedTarget> plannedTarget = placementService.nextPlannedTarget(
                 candidate, dna, cachedPlan, intent, currentConfig);
         if (plannedTarget.isPresent()) {
             PlannedTreeBlock plannedBlock = plannedTarget.get().block();
             Block target = plannedTarget.get().target();
+            Material previousMaterial = target.getType();
             placementService.place(target, plannedBlock);
             if (dna.markEvolvedBlock(keyFor(target), plannedBlock.role())) {
                 repository.markDirty("recorded evolved " + plannedBlock.role()
@@ -566,19 +681,30 @@ final class TreeConstructionRuntime {
             }
             maturityService.updateMaturity(candidate, dna, currentConfig);
             changedBlocks.incrementAndGet();
-            diagnostics.recordPlaced(
-                    plugin, currentConfig, target, plannedBlock);
+            boolean coordinateChurn = diagnostics.recordPlaced(
+                    plugin, currentConfig, dna, target,
+                    previousMaterial, plannedBlock, construction);
+            if (coordinateChurn) {
+                diagnostics.recordPotentialDeformation(
+                        currentConfig, dna, cachedPlan.plan(),
+                        cachedPlan.orderedBlocks(), candidate.world(),
+                        "coordinate-churn", false);
+            }
             plugin.pathDebug().trace(plugin, "tree-evolution",
                     "place.block",
                     plannedBlock.role() + " " + plannedBlock.material()
                             + " intent=" + intent
                             + " at " + format(target)
+                            + " " + plannedBlock.augment().marker()
+                            + " " + construction.marker()
                             + (liftedLeaves > 0
                                     ? " canopy-lift-leaves=" + liftedLeaves
                                     : ""));
             return TreeConstructionResult.changed(
                     1, plannedBlock.role() + " "
                             + plannedBlock.material() + " intent=" + intent
+                            + " augment=" + plannedBlock.augment()
+                            + " constructor=" + construction.ruleId()
                             + " dna=" + dna.key());
         }
 
@@ -588,6 +714,12 @@ final class TreeConstructionRuntime {
                     dna.key() + " intent=" + intent);
         }
         dna.markBlocked();
+        if (dna.blockedAttempts() >= 3) {
+            diagnostics.recordPotentialDeformation(
+                    currentConfig, dna, cachedPlan.plan(),
+                    cachedPlan.orderedBlocks(), candidate.world(),
+                    "three-consecutive-blocked-attempts", false);
+        }
         if (dna.blockedAttempts() >= 3) {
             dna.setCurrentIntent(
                     TreeGrowthIntentPolicy.nextAfterBlocked(dna.currentIntent()));
@@ -600,40 +732,6 @@ final class TreeConstructionRuntime {
                 "target-complete-or-blocked " + dna.key()
                         + " intent=" + intent);
     }
-    private TreeGrowthIntent refreshIntent(
-            TreeCandidate candidate,
-            TreeDna dna,
-            TreeEvolutionConfig currentConfig
-    ) {
-        if (dna.stageCleanupBurst() > 0) {
-            dna.setCurrentIntent(TreeGrowthIntent.CLEANUP);
-            return dna.currentIntent();
-        }
-        if (dna.currentIntent() == TreeGrowthIntent.CLEANUP) {
-            // ## Cleanup is a transition state, not a weighted maintenance task.
-            dna.setCurrentIntent(TreeGrowthIntent.CANOPY);
-        }
-        if (dna.stageGrowthBurst() > 0) {
-            dna.setCurrentIntent(TreeGrowthIntentPolicy.stageBurstIntent(candidate, dna));
-            return dna.currentIntent();
-        }
-        TreeGrowthIntent preferred = TreeGrowthIntentPolicy.preferredIntent(
-                candidate, dna, currentConfig,
-                reproductionService.cooldownUntil(dna.key()));
-        if (dna.blockedAttempts() >= 3 || dna.age() - dna.lastIntentChangeAge() >= TreeGrowthIntentPolicy.intentSpan(dna, dna.currentIntent())) {
-            dna.setCurrentIntent(preferred);
-        }
-        if (dna.damageCount() > 0 && dna.currentIntent() != TreeGrowthIntent.REPAIR) {
-            dna.setCurrentIntent(TreeGrowthIntent.REPAIR);
-        }
-        return dna.currentIntent();
-    }
-
-    // ## TRANSITION RECONCILER
-    // A source leaf may become planned wood only when the exact target and its
-    // parent dependency are ready. This avoids an AIR frame and prevents a
-    // cleanup pass from outrunning the replacement structure.
-
     private static String keyFor(Block block) {
         return block.getWorld().getUID() + ":" + block.getX() + ":"
                 + block.getY() + ":" + block.getZ();

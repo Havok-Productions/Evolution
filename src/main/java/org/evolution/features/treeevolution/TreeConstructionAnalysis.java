@@ -31,6 +31,10 @@ record BranchTipCoverage(
         int stalePersistentEnvelopeLeaves,
         Block firstStalePersistentEnvelopeLeaf
 ) {
+    int uncoveredPlannedEnvelopes() {
+        return Math.max(0, uncoveredTips - unplannedBareTips
+                - stalePersistentEnvelopeLeaves);
+    }
 }
 
 record TreeProjectionProgress(

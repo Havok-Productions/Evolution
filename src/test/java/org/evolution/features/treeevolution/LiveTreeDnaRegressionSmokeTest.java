@@ -13,9 +13,7 @@ public final class LiveTreeDnaRegressionSmokeTest {
 
     public static void main(String[] args) {
         assertLiveTerminalClassification();
-        List<TreeDna> fixtures = List.of(
-                reportedOak(), reportedBirch(), reportedAcacia(),
-                reportedRestartOak());
+        List<TreeDna> fixtures = reportedFixtures();
         for (TreeDna dna : fixtures) {
             TreePlan plan = PLANNER.plan(dna, null, false);
             TreeShapeEngine.ShapeReport report = SHAPE_ENGINE.analyze(plan, dna);
@@ -42,6 +40,14 @@ public final class LiveTreeDnaRegressionSmokeTest {
                     + " pruned-invalid=" + plan.prunedBranchCount());
         }
         System.out.println("Live tree DNA regression smoke test passed: fixtures=4");
+    }
+
+    // ## Replays use the same reported DNA instead of inventing a second set of
+    // "live-like" examples that could quietly drift from our regression history.
+    static List<TreeDna> reportedFixtures() {
+        return List.of(
+                reportedOak(), reportedBirch(), reportedAcacia(),
+                reportedRestartOak());
     }
 
     private static void assertLiveTerminalClassification() {
@@ -78,7 +84,8 @@ public final class LiveTreeDnaRegressionSmokeTest {
     private static TreeDna reportedOak() {
         return new TreeDna(
                 FIXTURE_WORLD, -345, 72, 2421,
-                TreeSpecies.OAK, 8243259114096774696L,
+                TreeSpecies.OAK, TreeVariant.OAK_FANCY,
+                TreeSourcePattern.unknown(), 8243259114096774696L,
                 TreePersonality.WINDSWEPT, TreeRarity.COMMON,
                 22, 7, 2, 5, 1,
                 5, 5, 3, 5, 0.74D,
@@ -95,7 +102,8 @@ public final class LiveTreeDnaRegressionSmokeTest {
     private static TreeDna reportedBirch() {
         return new TreeDna(
                 FIXTURE_WORLD, 759, 70, -3571,
-                TreeSpecies.BIRCH, 239086054919454925L,
+                TreeSpecies.BIRCH, TreeVariant.BIRCH_TALL,
+                TreeSourcePattern.unknown(), 239086054919454925L,
                 TreePersonality.TALL, TreeRarity.UNCOMMON,
                 26, 3, 2, 3, 0,
                 3, 3, 3, 3, 0.58D,
@@ -112,7 +120,8 @@ public final class LiveTreeDnaRegressionSmokeTest {
     private static TreeDna reportedAcacia() {
         return new TreeDna(
                 FIXTURE_WORLD, -145, 100, -4221,
-                TreeSpecies.ACACIA, 4163027354591221137L,
+                TreeSpecies.ACACIA, TreeVariant.ACACIA_SINGLE_FORK,
+                TreeSourcePattern.unknown(), 4163027354591221137L,
                 TreePersonality.UMBRELLA, TreeRarity.COMMON,
                 20, 7, 2, 6, 3,
                 6, 6, 2, 5, 0.54D,
@@ -131,7 +140,8 @@ public final class LiveTreeDnaRegressionSmokeTest {
     private static TreeDna reportedRestartOak() {
         return new TreeDna(
                 FIXTURE_WORLD, -1445, 64, 395,
-                TreeSpecies.OAK, -5138120179190301385L,
+                TreeSpecies.OAK, TreeVariant.OAK_STANDARD,
+                TreeSourcePattern.unknown(), -5138120179190301385L,
                 TreePersonality.BALANCED, TreeRarity.UNCOMMON,
                 22, 10, 2, 5, 0,
                 5, 5, 3, 5, 0.74D,

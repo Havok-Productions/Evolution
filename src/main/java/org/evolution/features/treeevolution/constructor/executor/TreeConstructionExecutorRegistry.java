@@ -4,17 +4,17 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import org.evolution.features.treeevolution.constructor.TreeConstructionDecision;
-import org.evolution.features.treeevolution.constructor.TreeConstructionPhase;
+import org.evolution.features.treeevolution.constructor.TreeConstructionSubrule;
 
 /**
  * Immutable phase-to-executor attachment table.
  */
 public final class TreeConstructionExecutorRegistry {
-    private final Map<TreeConstructionPhase, TreeConstructionExecutor> executors;
+    private final Map<TreeConstructionSubrule, TreeConstructionExecutor> executors;
 
     public TreeConstructionExecutorRegistry() {
-        EnumMap<TreeConstructionPhase, TreeConstructionExecutor> attachments =
-                new EnumMap<>(TreeConstructionPhase.class);
+        EnumMap<TreeConstructionSubrule, TreeConstructionExecutor> attachments =
+                new EnumMap<>(TreeConstructionSubrule.class);
         for (TreeConstructionExecutor executor : List.of(
                 new OwnershipGateExecutor(),
                 new DamageRepairExecutor(),
@@ -24,12 +24,20 @@ public final class TreeConstructionExecutorRegistry {
                 new BranchConstructionExecutor(),
                 new DetailConstructionExecutor(),
                 new StageFinalizer())) {
-            for (TreeConstructionPhase phase : executor.phases()) {
+            for (TreeConstructionSubrule subrule : executor.subrules()) {
+                if (!executor.attachments().contains(
+                        subrule.attachment())) {
+                    throw new IllegalStateException(
+                            executor.getClass().getSimpleName()
+                                    + " claims " + subrule
+                                    + " but does not own attachment "
+                                    + subrule.attachment());
+                }
                 TreeConstructionExecutor previous =
-                        attachments.putIfAbsent(phase, executor);
+                        attachments.putIfAbsent(subrule, executor);
                 if (previous != null) {
                     throw new IllegalStateException(
-                            "Constructor phase " + phase
+                            "Constructor subrule " + subrule
                                     + " is attached to both "
                                     + previous.getClass().getSimpleName()
                                     + " and "
@@ -37,10 +45,11 @@ public final class TreeConstructionExecutorRegistry {
                 }
             }
         }
-        for (TreeConstructionPhase phase : TreeConstructionPhase.values()) {
-            if (!attachments.containsKey(phase)) {
+        for (TreeConstructionSubrule subrule
+                : TreeConstructionSubrule.values()) {
+            if (!attachments.containsKey(subrule)) {
                 throw new IllegalStateException(
-                        "Constructor phase has no executor: " + phase);
+                        "Constructor subrule has no executor: " + subrule);
             }
         }
         executors = Map.copyOf(attachments);
@@ -49,10 +58,10 @@ public final class TreeConstructionExecutorRegistry {
     public TreeConstructionResult execute(
             TreeConstructionDecision decision,
             TreeConstructionOperations operations) {
-        return executors.get(decision.phase()).execute(decision, operations);
+        return executors.get(decision.subrule()).execute(decision, operations);
     }
 
-    public String executorName(TreeConstructionPhase phase) {
-        return executors.get(phase).getClass().getSimpleName();
+    public String executorName(TreeConstructionSubrule subrule) {
+        return executors.get(subrule).getClass().getSimpleName();
     }
 }

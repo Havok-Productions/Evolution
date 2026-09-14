@@ -131,8 +131,25 @@ final class TreeTransitionLedger {
                 sourceLogs, sourceLeaves, retiredLeaves,
                 Set.copyOf(updated), evolvedLeaves, ownershipVersion);
     }
+
+    TreeTransitionLedger retireEvolvedLeaf(String blockKey) {
+        if (!evolvedLeaves.contains(blockKey)) {
+            return this;
+        }
+        Set<String> updated = new HashSet<>(evolvedLeaves);
+        updated.remove(blockKey);
+        return copyWith(
+                sourceLogs, sourceLeaves, retiredLeaves,
+                evolvedLogs, Set.copyOf(updated), ownershipVersion);
+    }
+
     TreeTransitionLedger recordEvolvedLeaf(String blockKey) {
         return recordEvolved(blockKey, false);
+    }
+
+    TreeTransitionLedger reconcileEvolvedRole(
+            String blockKey, boolean wood) {
+        return recordEvolved(blockKey, wood);
     }
 
     TreeTransitionLedger completeTransition() {
@@ -140,6 +157,10 @@ final class TreeTransitionLedger {
         // Completed trees remain auditable until the next stage captures a new epoch.
         Set<String> completedLogs = new HashSet<>(evolvedLogs);
         completedLogs.addAll(sourceLogs);
+        // ## A source log may be atomically reshaped into target canopy. The
+        // immutable source snapshot remains useful during the transition, but
+        // its former wood role must not return after completion.
+        completedLogs.removeAll(evolvedLeaves);
         return copyWith(
                 Set.of(), Set.of(), Set.of(),
                 Set.copyOf(completedLogs), evolvedLeaves,
@@ -173,7 +194,12 @@ final class TreeTransitionLedger {
         if (ownershipVersion < CURRENT_OWNERSHIP_VERSION && !hasSnapshot()) {
             return true;
         }
-        return sourceLogs.contains(blockKey) || evolvedLogs.contains(blockKey);
+        // ## Current evolved role wins over historical source role. Without
+        // this precedence, an old log converted to planned leaves remains both
+        // wood and canopy forever and the constructor repeatedly repairs it.
+        return evolvedLogs.contains(blockKey)
+                || sourceLogs.contains(blockKey)
+                        && !evolvedLeaves.contains(blockKey);
     }
 
     boolean isOriginalLeaf(String blockKey) {
@@ -228,19 +254,26 @@ final class TreeTransitionLedger {
         if (blockKey == null || blockKey.isBlank()) {
             return this;
         }
-        Set<String> existing = wood ? evolvedLogs : evolvedLeaves;
-        if (existing.contains(blockKey)) {
+        Set<String> desired = wood ? evolvedLogs : evolvedLeaves;
+        Set<String> opposite = wood ? evolvedLeaves : evolvedLogs;
+        if (desired.contains(blockKey) && !opposite.contains(blockKey)) {
             return this;
         }
-        Set<String> updated = new HashSet<>(existing);
-        updated.add(blockKey);
+        Set<String> updatedDesired = new HashSet<>(desired);
+        updatedDesired.add(blockKey);
+        Set<String> updatedOpposite = new HashSet<>(opposite);
+        updatedOpposite.remove(blockKey);
+        // ## Role changes are atomic. Keeping the old receipt lets cleanup
+        // delete a correct live target and construction recreate it forever.
         return wood
                 ? copyWith(
                         sourceLogs, sourceLeaves, retiredLeaves,
-                        Set.copyOf(updated), evolvedLeaves, ownershipVersion)
+                        Set.copyOf(updatedDesired),
+                        Set.copyOf(updatedOpposite), ownershipVersion)
                 : copyWith(
                         sourceLogs, sourceLeaves, retiredLeaves,
-                        evolvedLogs, Set.copyOf(updated), ownershipVersion);
+                        Set.copyOf(updatedOpposite),
+                        Set.copyOf(updatedDesired), ownershipVersion);
     }
 
     private TreeTransitionLedger copyWith(

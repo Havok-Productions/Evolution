@@ -13,6 +13,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -224,7 +225,48 @@ public final class TreeShapeSmokeTest {
         return sampleDna(species, stage, context);
     }
 
-    private static TreeDna sampleDna(TreeSpecies species, TreeMaturityStage stage, BiomeSmokeContext context) {
+    static TreeDna sampleDna(
+            TreeVariant variant,
+            TreeMaturityStage stage,
+        int seedVariant
+    ) {
+        TreeSpecies species = variant.species();
+        BiomeSmokeContext base =
+                BiomeSmokeContext.defaultFor(species);
+        BiomeSmokeContext context = new BiomeSmokeContext(
+                base.id() + "-" + variant.id(),
+                variant.id(),
+                species,
+                base.pathName(),
+                variantPersonality(variant),
+                base.heightBonus(),
+                base.canopyRadiusBonus(),
+                base.canopyDensityBonus(),
+                base.vineChance(),
+                base.groundRadius(),
+                base.detailDensity(),
+                base.groundPalette(),
+                base.detailPalette(),
+                base.seed() + seedVariant * 8191L);
+        return sampleDna(species, stage, context, variant);
+    }
+
+    private static TreeDna sampleDna(
+            TreeSpecies species,
+            TreeMaturityStage stage,
+            BiomeSmokeContext context
+    ) {
+        return sampleDna(
+                species, stage, context,
+                TreeVariant.defaultFor(species));
+    }
+
+    private static TreeDna sampleDna(
+            TreeSpecies species,
+            TreeMaturityStage stage,
+            BiomeSmokeContext context,
+            TreeVariant variant
+    ) {
         int targetHeight = switch (species) {
             case OAK -> 13;
             case BIRCH -> 15;
@@ -270,7 +312,9 @@ public final class TreeShapeSmokeTest {
             case CHERRY -> TreePersonality.WIDE;
             default -> TreePersonality.BALANCED;
         } : context.personality();
-        TreeRarity rarity = species == TreeSpecies.JUNGLE && stage.ordinal() >= TreeMaturityStage.MATURE.ordinal()
+        TreeRarity rarity = variant == TreeVariant.JUNGLE_MEGA
+                && stage.ordinal()
+                        >= TreeMaturityStage.MATURE.ordinal()
                 ? TreeRarity.LANDMARK
                 : TreeRarity.COMMON;
         return new TreeDna(
@@ -279,7 +323,11 @@ public final class TreeShapeSmokeTest {
                 64,
                 0,
                 species,
-                context.seed() ^ 0x5EEDL ^ species.ordinal() * 131L ^ stage.ordinal() * 17L,
+                variant,
+                TreeSourcePattern.legacy(
+                        targetHeight, trunkWidth,
+                        Math.max(radiusX, radiusZ), layerCount),
+                context.seed() ^ 0x5EEDL ^ species.ordinal() * 131L,
                 personality,
                 rarity,
                 targetHeight,
@@ -329,7 +377,30 @@ public final class TreeShapeSmokeTest {
         );
     }
 
-    private static void renderPng(TreePlan plan, TreeDna dna, TreeShapeEngine.ShapeReport report, Path path) throws IOException {
+    private static TreePersonality variantPersonality(
+            TreeVariant variant
+    ) {
+        return switch (variant) {
+            case OAK_FANCY, ACACIA_MULTI_FORK ->
+                    TreePersonality.FORKED;
+            case OAK_TALL, BIRCH_TALL, DARK_OAK_TALL,
+                    MANGROVE_TALL -> TreePersonality.TALL;
+            case OAK_BROAD, DARK_OAK_BROAD,
+                    MANGROVE_SPREADING, CHERRY_BROAD ->
+                    TreePersonality.WIDE;
+            case SPRUCE_PINE, SPRUCE_MEGA_PINE ->
+                    TreePersonality.SPIRE;
+            case SPRUCE_CLASSIC, SPRUCE_MEGA,
+                    CHERRY_LAYERED -> TreePersonality.LAYERED;
+            case JUNGLE_LARGE -> TreePersonality.FORKED;
+            case JUNGLE_MEGA -> TreePersonality.ANCIENT_LANDMARK;
+            case ACACIA_SINGLE_FORK -> TreePersonality.UMBRELLA;
+            case ACACIA_WINDSWEPT -> TreePersonality.WINDSWEPT;
+            default -> TreePersonality.BALANCED;
+        };
+    }
+
+    static void renderPng(TreePlan plan, TreeDna dna, TreeShapeEngine.ShapeReport report, Path path) throws IOException {
         List<PlannedTreeBlock> blocks = plan.orderedBlocks().stream()
                 .sorted(Comparator.comparingInt(PlannedTreeBlock::y)
                         .thenComparingInt(PlannedTreeBlock::z)
@@ -342,7 +413,7 @@ public final class TreeShapeSmokeTest {
         g.fillRect(0, 0, image.getWidth(), image.getHeight());
         g.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
         g.setColor(new Color(32, 38, 46));
-        g.drawString(dna.species().id() + " " + dna.maturityStage()
+        g.drawString(dna.variant().id() + " " + dna.maturityStage()
                 + " normal=" + report.normalEnough()
                 + " floatingWood=" + report.floatingWood()
                 + " topCovered=" + report.topCovered()
@@ -456,7 +527,7 @@ public final class TreeShapeSmokeTest {
         g.drawPolygon(xs, ys, 4);
     }
 
-    private static String renderText(TreePlan plan, TreeDna dna, TreeShapeEngine.ShapeReport report) {
+    static String renderText(TreePlan plan, TreeDna dna, TreeShapeEngine.ShapeReport report) {
         StringBuilder text = new StringBuilder();
         text.append("## Simulated 3D target plan for ").append(dna.species().id()).append(" ").append(dna.maturityStage()).append(System.lineSeparator());
         text.append("normalEnough=").append(report.normalEnough())
@@ -470,6 +541,41 @@ public final class TreeShapeSmokeTest {
                 .append(" topCovered=").append(report.topCovered())
                 .append(" leafWoodRatio=").append(round(report.leafWoodRatio()))
                 .append(System.lineSeparator());
+        Map<TreePlacementAugment, Long> augmentCounts =
+                plan.orderedBlocks().stream().collect(
+                        java.util.stream.Collectors.groupingBy(
+                                PlannedTreeBlock::augment,
+                                () -> new EnumMap<>(
+                                        TreePlacementAugment.class),
+                                java.util.stream.Collectors.counting()));
+        text.append("## Planner augment legend/counts")
+                .append(System.lineSeparator());
+        for (TreePlacementAugment augment
+                : TreePlacementAugment.values()) {
+            long count = augmentCounts.getOrDefault(augment, 0L);
+            if (count > 0) {
+                text.append(augment.marker())
+                        .append(" count=").append(count)
+                        .append(" contract=").append(augment.contract())
+                        .append(System.lineSeparator());
+            }
+        }
+        text.append("## Branch coordinate provenance")
+                .append(System.lineSeparator());
+        for (PlannedTreeBlock block : plan.orderedBlocks()) {
+            if (block.role() != TreeBlockRole.BRANCH) {
+                continue;
+            }
+            text.append(block.x()).append(',').append(block.y())
+                    .append(',').append(block.z())
+                    .append(" branch=").append(block.branchId())
+                    .append(':').append(block.branchStep())
+                    .append(" parent=").append(block.parentX())
+                    .append(',').append(block.parentY()).append(',')
+                    .append(block.parentZ())
+                    .append(' ').append(block.augment().marker())
+                    .append(System.lineSeparator());
+        }
         int minY = plan.orderedBlocks().stream().mapToInt(PlannedTreeBlock::y).min().orElse(dna.baseY());
         int maxY = plan.orderedBlocks().stream().mapToInt(PlannedTreeBlock::y).max().orElse(dna.baseY());
         int radius = 10;

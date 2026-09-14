@@ -24,13 +24,33 @@ final class BranchPlanner {
         int usableHeight = Math.max(1, topY - firstBranchY + 1);
         boolean developedStage = dna.maturityStage().ordinal() >= TreeMaturityStage.MATURE.ordinal();
         boolean coniferLayering = dna.species() == TreeSpecies.SPRUCE && TreeSpeciesStageStyle.canopyLayerCount(dna) > 0;
-        if ((developedStage && dna.hugeArchitecture()) || coniferLayering || (developedStage && TreeSpeciesStageStyle.canopyLayerCount(dna) > 0)) {
-            planLayerBranches(plan, dna, branches, random, firstBranchY, visibleHeight, topY);
+        boolean acaciaForkArchitecture =
+                dna.species() == TreeSpecies.ACACIA;
+        if (!acaciaForkArchitecture
+                && ((developedStage && dna.hugeArchitecture())
+                        || coniferLayering
+                        || (developedStage
+                                && TreeSpeciesStageStyle
+                                        .canopyLayerCount(dna) > 0))) {
+            plan.withAugment(TreePlacementAugment.BRANCH_LAYER_PATH,
+                    () -> planLayerBranches(
+                            plan, dna, branches, random, firstBranchY,
+                            visibleHeight, topY, branchCount));
         }
-        if (!coniferLayering) {
-            planSignatureBranches(plan, dna, branches, random, firstBranchY, visibleHeight, topY);
+        if (!coniferLayering && branches.size() < branchCount) {
+            plan.withAugment(TreePlacementAugment.BRANCH_SIGNATURE_PATH,
+                    () -> planSignatureBranches(
+                            plan, dna, branches, random, firstBranchY,
+                            visibleHeight, topY,
+                            branchCount - branches.size()));
         }
-        for (int index = 0; index < branchCount; index++) {
+        // ## Layer, signature and ordinary branches share one stage budget.
+        // Species shaping must specialize that budget, never silently multiply it.
+        int ordinaryBranchCount = Math.max(0, branchCount - branches.size());
+        for (int index = 0; index < ordinaryBranchCount; index++) {
+            if (branches.size() >= branchCount) {
+                break;
+            }
             BlockFace face = FACES.get(Math.floorMod(dna.branchBias() + index + random.nextInt(3), FACES.size()));
             int y = firstBranchY + random.nextInt(usableHeight);
             int length = TreeSpeciesStageStyle.branchLengthForHeight(dna, y, range(random, dna.minBranchLength(), dna.maxBranchLength()), random);
@@ -66,7 +86,8 @@ final class BranchPlanner {
             }
             TreeBranchPlan branch = builder.build();
             branches.add(branch);
-            if (developedStage
+            if (branches.size() < branchCount
+                    && developedStage
                     && (TreeSpeciesStageStyle.favorsFork(dna) || dna.personality() == TreePersonality.FORKED || dna.personality() == TreePersonality.ANCIENT_LANDMARK)
                     && length >= 3
                     && random.nextInt(dna.maturityStage() == TreeMaturityStage.MATURE ? 3 : 2) == 0) {
@@ -93,8 +114,8 @@ final class BranchPlanner {
         return branches;
     }
 
-    private void planSignatureBranches(TreePlan plan, TreeDna dna, List<TreeBranchPlan> branches, Random random, int firstBranchY, int visibleHeight, int topY) {
-        int arms = signatureArmCount(dna);
+    private void planSignatureBranches(TreePlan plan, TreeDna dna, List<TreeBranchPlan> branches, Random random, int firstBranchY, int visibleHeight, int topY, int availableBranches) {
+        int arms = Math.min(availableBranches, signatureArmCount(dna));
         if (arms <= 0) {
             return;
         }
@@ -134,12 +155,8 @@ final class BranchPlanner {
                 case MATURE -> 6;
                 case ANCIENT -> 8;
             };
-            case ACACIA -> switch (dna.maturityStage()) {
-                case SMALL -> 2;
-                case MEDIUM -> 3;
-                case MATURE -> 4;
-                case ANCIENT -> 5;
-            };
+            case ACACIA ->
+                    AcaciaArchitecturePolicy.forkCount(dna);
             case CHERRY -> switch (dna.maturityStage()) {
                 case SMALL -> 2;
                 case MEDIUM -> 4;
@@ -157,16 +174,36 @@ final class BranchPlanner {
     }
 
     private int signatureBranchY(TreeDna dna, int firstBranchY, int visibleHeight, int topY, int index, int arms) {
+        if (dna.species() == TreeSpecies.ACACIA) {
+            int crownBand = switch (dna.maturityStage()) {
+                case SMALL -> 1;
+                case MEDIUM -> 2;
+                case MATURE -> 3;
+                case ANCIENT -> 4;
+            };
+            // ## Acacia forks share one upper crown band. Spreading anchors
+            // through the full trunk height creates stacked leaf clumps rather
+            // than one coherent umbrella.
+            int y = topY - crownBand
+                    + (index % Math.max(1, crownBand));
+            return Math.max(firstBranchY, Math.min(topY - 1, y));
+        }
         double low = switch (dna.species()) {
             case DARK_OAK, MANGROVE -> 0.34D;
-            case ACACIA, CHERRY, OAK -> 0.46D;
+            case CHERRY, OAK -> 0.46D;
+            case ACACIA -> switch (dna.maturityStage()) {
+                case SMALL -> 0.68D;
+                case MEDIUM -> 0.60D;
+                case MATURE -> 0.52D;
+                case ANCIENT -> 0.44D;
+            };
             case BIRCH -> 0.62D;
             case JUNGLE -> 0.56D;
             case SPRUCE -> 0.30D;
         };
         double span = switch (dna.species()) {
             case BIRCH -> 0.22D;
-            case ACACIA -> 0.30D;
+            case ACACIA -> 0.20D;
             case JUNGLE -> 0.34D;
             case DARK_OAK, MANGROVE -> 0.36D;
             default -> 0.32D;
@@ -184,6 +221,10 @@ final class BranchPlanner {
     }
 
     private int signatureBranchLength(TreeDna dna, int y, int index, Random random) {
+        if (dna.species() == TreeSpecies.ACACIA) {
+            return AcaciaArchitecturePolicy.branchLength(
+                    dna, index);
+        }
         int stageBase = switch (dna.maturityStage()) {
             case SMALL -> 2;
             case MEDIUM -> 3;
@@ -197,6 +238,8 @@ final class BranchPlanner {
             case OAK -> 0;
         };
         int silhouette = Math.max(stageBase, stageBase + speciesBonus + (index % 2));
+        silhouette = Math.max(1,
+                silhouette + signatureLengthAdjustment(dna));
         int rolled = TreeSpeciesStageStyle.branchLengthForHeight(dna, y, range(random, dna.minBranchLength(), dna.maxBranchLength()), random);
         int cap = Math.max(2, Math.max(TreeSpeciesStageStyle.canopyRadiusX(dna), TreeSpeciesStageStyle.canopyRadiusZ(dna)) + 1);
         if (dna.species() == TreeSpecies.BIRCH) {
@@ -205,17 +248,36 @@ final class BranchPlanner {
         return Math.max(1, Math.min(cap, Math.max(rolled, silhouette)));
     }
 
+    private int signatureLengthAdjustment(TreeDna dna) {
+        return switch (dna.variant()) {
+            case DARK_OAK_STANDARD, MANGROVE_SHORT -> -1;
+            case DARK_OAK_BROAD, MANGROVE_SPREADING,
+                    OAK_BROAD -> 1;
+            default -> 0;
+        };
+    }
+
     private int signatureBendAfter(TreeDna dna, int length, int index) {
         if (length <= 2 || dna.species() == TreeSpecies.BIRCH) {
             return length + 1;
         }
-        if (dna.species() == TreeSpecies.ACACIA || dna.species() == TreeSpecies.OAK || dna.species() == TreeSpecies.CHERRY) {
+        if (dna.species() == TreeSpecies.ACACIA) {
+            return AcaciaArchitecturePolicy.bendAfter(length);
+        }
+        if (dna.species() == TreeSpecies.OAK || dna.species() == TreeSpecies.CHERRY) {
             return Math.max(1, length / 2);
         }
         return index % 2 == 0 ? Math.max(2, length - 2) : length + 1;
     }
 
     private BlockFace signatureSecondaryFace(TreeDna dna, BlockFace primary, int index) {
+        if (dna.species() == TreeSpecies.ACACIA) {
+            // ## Every acacia fork turns once. Alternating the turn keeps the
+            // crown irregular without sending several limbs down one long axis.
+            int direction = index % 2 == 0 ? 1 : -1;
+            return FACES.get(Math.floorMod(
+                    FACES.indexOf(primary) + direction, FACES.size()));
+        }
         if (dna.species() == TreeSpecies.BIRCH || index % 3 == 0) {
             return primary;
         }
@@ -289,7 +351,8 @@ final class BranchPlanner {
 
     private boolean shouldRiseSignatureBranch(TreeDna dna, int step, int length) {
         return switch (dna.species()) {
-            case ACACIA -> step == Math.max(2, length / 2) || step == length;
+            case ACACIA ->
+                    AcaciaArchitecturePolicy.risesAt(step, length);
             case JUNGLE -> step >= Math.max(3, length - 2) && step % 2 == 0;
             case OAK, CHERRY -> step == length && dna.maturityStage().ordinal() >= TreeMaturityStage.MEDIUM.ordinal();
             case DARK_OAK, MANGROVE -> false;
@@ -297,7 +360,7 @@ final class BranchPlanner {
             case SPRUCE -> false;
         };
     }
-    private void planLayerBranches(TreePlan plan, TreeDna dna, List<TreeBranchPlan> branches, Random random, int firstBranchY, int visibleHeight, int topY) {
+    private void planLayerBranches(TreePlan plan, TreeDna dna, List<TreeBranchPlan> branches, Random random, int firstBranchY, int visibleHeight, int topY, int branchBudget) {
         int layers = Math.max(1, TreeSpeciesStageStyle.canopyLayerCount(dna));
         for (int layer = 0; layer < layers; layer++) {
             double start = dna.species() == TreeSpecies.SPRUCE ? 0.28D : 0.36D;
@@ -306,6 +369,9 @@ final class BranchPlanner {
             int layerLength = Math.max(dna.maxBranchLength() + 1, TreeSpeciesStageStyle.canopyLayerSpread(dna) - Math.max(0, layer - 1));
             int arms = dna.rarity() == TreeRarity.LANDMARK || dna.personality() == TreePersonality.ANCIENT_LANDMARK ? 4 : 2 + random.nextInt(3);
             for (int arm = 0; arm < arms; arm++) {
+                if (branches.size() >= branchBudget) {
+                    return;
+                }
                 BlockFace face = FACES.get(Math.floorMod(dna.branchBias() + arm + layer, FACES.size()));
                 int branchY = y;
                 Anchor anchor = branchAnchor(dna, branchY, face, random);
@@ -372,7 +438,9 @@ final class BranchPlanner {
                 TreeBlockRole.BRANCH,
                 axis,
                 null
-        ).branchStep(branchId, step, x, y, z, false));
+        ).branchStep(branchId, step, x, y, z, false)
+                .withAugment(
+                        TreePlacementAugment.BRANCH_REINFORCEMENT));
         if (dna.trunkWidth() >= 4 && step <= Math.max(2, reinforcedSteps - 1)) {
             plan.add(new PlannedTreeBlock(
                     x - side.getModX(),
@@ -382,7 +450,9 @@ final class BranchPlanner {
                     TreeBlockRole.BRANCH,
                     axis,
                     null
-            ).branchStep(branchId, step, x, y, z, false));
+            ).branchStep(branchId, step, x, y, z, false)
+                    .withAugment(
+                            TreePlacementAugment.BRANCH_REINFORCEMENT));
         }
         if (dna.trunkWidth() >= 5 && step <= 2) {
             plan.add(new PlannedTreeBlock(
@@ -393,7 +463,9 @@ final class BranchPlanner {
                     TreeBlockRole.BRANCH,
                     axis,
                     null
-            ).branchStep(branchId, step, x, y, z, false));
+            ).branchStep(branchId, step, x, y, z, false)
+                    .withAugment(
+                            TreePlacementAugment.BRANCH_REINFORCEMENT));
         }
     }
 

@@ -157,8 +157,18 @@ public final class WaveFeature implements PluginFeature, Listener {
             long collectStarted = System.nanoTime();
             traceHierarchy(WaveActionPhase.ADVANCE_FRONTS, "advance-traveling-fronts");
             traceHierarchy(WaveActionPhase.COLLECT_VISUALS, "collect-wave-visuals");
-            ScanResult result = collectWaveVisuals(
-                    player, profile, wind, tick, currentConfig, visuals, uncertainColumns);
+            ScanResult result;
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "waves", "phase.collect-visuals")) {
+                result = collectWaveVisuals(
+                        player, profile, wind, tick, currentConfig,
+                        visuals, uncertainColumns);
+                phase.workUnits(result.columnsScanned())
+                        .changedUnits(visuals.size())
+                        .detail("fronts=" + result.activeFronts()
+                                + " uncertain="
+                                + result.uncertainSurfaceColumns());
+            }
             traceHierarchy(
                     WaveActionPhase.COLLECT_VISUALS,
                     WaveActionSubrule.PER_PLAYER_COAST_AREA_DISTRIBUTION,
@@ -171,14 +181,27 @@ public final class WaveFeature implements PluginFeature, Listener {
             trimExpiredRunups(tick, currentConfig);
             long renderStarted = System.nanoTime();
             traceHierarchy(WaveActionPhase.RENDER, "render-wave-frame");
-            WaveRenderer.RenderResult renderResult = renderer.render(
-                    player, visuals, uncertainColumns,
-                    result.chunkBoundaryCrossed(), currentConfig, tick);
+            WaveRenderer.RenderResult renderResult;
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "waves", "phase.packet-render")) {
+                renderResult = renderer.render(
+                        player, visuals, uncertainColumns,
+                        result.chunkBoundaryCrossed(), currentConfig, tick);
+                phase.workUnits(visuals.size())
+                        .changedUnits(renderResult.changed())
+                        .detail("active=" + renderResult.active()
+                                + " reasserted="
+                                + renderResult.reasserted());
+            }
             int changed = renderResult.changed();
             diagnostics.recordPhases(renderStarted - collectStarted, System.nanoTime() - renderStarted);
             if (currentConfig.boatBobbingEnabled()) {
                 traceHierarchy(WaveActionPhase.BOAT_RESPONSE, "boat-response");
-                bobNearbyBoats(player, tick, currentConfig);
+                try (ReportSample phase = plugin.resourceReporter().begin(
+                        "waves", "phase.boat-response")) {
+                    bobNearbyBoats(player, tick, currentConfig);
+                    phase.detail("nearby-boat-scan");
+                }
             }
             diagnostics.recordColumns(result.columnsScanned());
             diagnostics.recordRunups(result.runups());
@@ -334,14 +357,31 @@ public final class WaveFeature implements PluginFeature, Listener {
         int expandingColumns = 0;
         int closingColumns = 0;
         int lakeInboundColumns = 0;
-        WaveLakeFlowCache.Snapshot lakeFlow = lakeFlowCache.snapshot(
-                player.getUniqueId(), world, origin.getBlockX(), origin.getBlockZ(),
-                simulationRadius, step, tick, surfaceCache, currentConfig);
-        TravelingWaveRegistry.Update frontUpdate = travelingWaves.update(
-                player.getUniqueId(), world.getUID(), origin.getBlockX(), origin.getBlockZ(),
-                tick, profile, currentConfig.ovalSettings(), wind.x(), wind.z(),
-                radius, simulationRadius,
-                currentConfig.maximumIncomingFrontsPerCoastAreaPerPlayer(), lakeFlow);
+        WaveLakeFlowCache.Snapshot lakeFlow;
+        try (ReportSample phase = plugin.resourceReporter().begin(
+                "waves", "phase.topology-snapshot")) {
+            lakeFlow = lakeFlowCache.snapshot(
+                    player.getUniqueId(), world, origin.getBlockX(),
+                    origin.getBlockZ(), simulationRadius, step, tick,
+                    surfaceCache, currentConfig);
+            phase.workUnits(lakeFlow.knownCells())
+                    .detail("water=" + lakeFlow.waterCells()
+                            + " inherited=" + lakeFlow.inheritedCells());
+        }
+        TravelingWaveRegistry.Update frontUpdate;
+        try (ReportSample phase = plugin.resourceReporter().begin(
+                "waves", "phase.front-registry-update")) {
+            frontUpdate = travelingWaves.update(
+                    player.getUniqueId(), world.getUID(), origin.getBlockX(),
+                    origin.getBlockZ(), tick, profile,
+                    currentConfig.ovalSettings(), wind.x(), wind.z(),
+                     radius, simulationRadius,
+                     currentConfig.maximumIncomingFrontsPerCoastAreaPerPlayer(),
+                     currentConfig.maximumVisibleFrontsPerPlayer(),
+                     lakeFlow);
+            phase.workUnits(frontUpdate.fronts().size())
+                    .detail(frontUpdate.sources().summary());
+        }
         ViewMotion viewMotion = trackView(player.getUniqueId(), world.getUID(),
                 origin.getBlockX(), origin.getBlockZ(),
                 lakeFlow.centerX(), lakeFlow.centerZ());

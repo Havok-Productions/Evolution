@@ -45,6 +45,8 @@ public final class BlockProvenanceSmokeTest {
                 64,
                 0,
                 TreeSpecies.OAK,
+                TreeVariant.OAK_STANDARD,
+                TreeSourcePattern.unknown(),
                 12345L,
                 TreePersonality.BALANCED,
                 TreeRarity.COMMON,

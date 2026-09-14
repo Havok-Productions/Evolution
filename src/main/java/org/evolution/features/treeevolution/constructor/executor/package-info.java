@@ -1,7 +1,10 @@
 /**
  * ## CONSTRUCTOR EXECUTOR OWNERSHIP
  *
- * <p>Each construction phase is attached to exactly one executor:</p>
+ * <p>Each construction subrule is attached to exactly one executor. Several
+ * subrules may share a mini-constructor, but each dispatches a distinct
+ * operation method; an executor cannot silently fall through to a sibling
+ * subrule:</p>
  *
  * <ul>
  *   <li>{@code OwnershipGateExecutor}: ownership and source snapshot gates</li>
@@ -14,7 +17,7 @@
  *   <li>{@code StageFinalizer}: transition closure and maturity handoff</li>
  * </ul>
  *
- * <p>The registry rejects duplicate or missing phase owners. Executors invoke
+ * <p>The registry rejects duplicate or missing subrule owners. Executors invoke
  * shared world mechanics only through {@code TreeConstructionOperations}.</p>
  */
 package org.evolution.features.treeevolution.constructor.executor;

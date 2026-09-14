@@ -15,13 +15,14 @@ final class TreeDnaFactory {
 
     static TreeDna create(World world, TreeCandidate candidate,
             TreeGrowthProfile profile, TreeProfileSample sample,
+            TreeVariant variant, TreeSourcePattern sourcePattern,
             String parentKey, int generation) {
         long seed = new Random().nextLong();
         Random random = new Random(seed ^ candidate.baseKey().hashCode());
         String text = sampleText(candidate.species(), sample);
         TreeRarity rarity = rarityFor(text, random);
         TreePersonality personality = personalityFor(
-                candidate.species(), text, rarity, random);
+                candidate.species(), variant, text, rarity, random);
         int targetHeight = randomRange(
                 random, profile.minTargetHeight(), profile.maxTargetHeight());
         targetHeight = scaledHeight(
@@ -29,6 +30,11 @@ final class TreeDnaFactory {
                 rarity, text, random);
         targetHeight = Math.max(
                 targetHeight, candidate.height() + random.nextInt(4));
+        targetHeight = Math.max(
+                targetHeight,
+                TreeVariantPolicy.targetHeightFloor(
+                        candidate.species(), variant,
+                        personality, rarity));
         ShapeTraits shape = shapeTraits(
                 candidate.species(), profile, sample, personality,
                 rarity, targetHeight, random);
@@ -38,12 +44,15 @@ final class TreeDnaFactory {
                 candidate.baseY(),
                 candidate.baseZ(),
                 candidate.species(),
+                variant,
+                sourcePattern,
                 seed,
                 personality,
                 rarity,
                 targetHeight,
                 TreeDnaShapeRules.normalizeBranchCount(
-                        candidate.species(), personality, targetHeight,
+                        candidate.species(), variant,
+                        personality, targetHeight,
                         randomRange(random, profile.minBranches(),
                                 profile.maxBranches())),
                 profile.minBranchLength(),
@@ -150,12 +159,17 @@ final class TreeDnaFactory {
         return TreeRarity.COMMON;
     }
 
-    private static TreePersonality personalityFor(TreeSpecies species,
-            String text, TreeRarity rarity, Random random) {
-        if (rarity == TreeRarity.LANDMARK) {
-            return random.nextBoolean()
-                    ? TreePersonality.ANCIENT_LANDMARK
-                    : TreePersonality.HOLLOW;
+    private static TreePersonality personalityFor(
+            TreeSpecies species,
+            TreeVariant variant,
+            String text,
+            TreeRarity rarity,
+            Random random
+    ) {
+        TreePersonality variantPersonality =
+                personalityForVariant(variant, random);
+        if (variantPersonality != null) {
+            return variantPersonality;
         }
         if (text.contains("fancy") || text.contains("large")
                 || text.contains("wide")) {
@@ -200,6 +214,35 @@ final class TreeDnaFactory {
             case 3 -> TreePersonality.FORKED;
             case 4 -> TreePersonality.WINDSWEPT;
             default -> TreePersonality.BALANCED;
+        };
+    }
+
+    private static TreePersonality personalityForVariant(
+            TreeVariant variant,
+            Random random
+    ) {
+        return switch (variant) {
+            case OAK_FANCY -> TreePersonality.FORKED;
+            case OAK_TALL, BIRCH_TALL, DARK_OAK_TALL,
+                    MANGROVE_TALL -> TreePersonality.TALL;
+            case OAK_BROAD, DARK_OAK_BROAD,
+                    MANGROVE_SPREADING, CHERRY_BROAD ->
+                    TreePersonality.WIDE;
+            case SPRUCE_PINE, SPRUCE_MEGA_PINE ->
+                    TreePersonality.SPIRE;
+            case SPRUCE_MEGA -> TreePersonality.LAYERED;
+            case JUNGLE_BUSH, JUNGLE_SMALL,
+                    BIRCH_STANDARD, OAK_STANDARD,
+                    DARK_OAK_STANDARD, MANGROVE_SHORT,
+                    CHERRY_COMPACT -> TreePersonality.BALANCED;
+            case JUNGLE_LARGE -> random.nextBoolean()
+                    ? TreePersonality.FORKED : TreePersonality.WIDE;
+            case JUNGLE_MEGA -> TreePersonality.ANCIENT_LANDMARK;
+            case ACACIA_SINGLE_FORK -> TreePersonality.UMBRELLA;
+            case ACACIA_MULTI_FORK -> TreePersonality.FORKED;
+            case ACACIA_WINDSWEPT -> TreePersonality.WINDSWEPT;
+            case CHERRY_LAYERED -> TreePersonality.LAYERED;
+            case SPRUCE_CLASSIC -> TreePersonality.LAYERED;
         };
     }
 

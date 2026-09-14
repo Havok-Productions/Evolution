@@ -14,11 +14,23 @@ final class TreeFocusPolicy {
     ) {
         return exposedUpperLogs <= 0
                 && uncoveredBranchTips <= 0
-                && completion.trunkPercent() >= budget.trunkPercent()
+                && targetVoxelsComplete(completion, budget);
+    }
+
+    static boolean targetVoxelsComplete(
+            TreeGrowthQueuePolicy.Completion completion,
+            TreeGrowthQueuePolicy.Budget budget
+    ) {
+        // ## Damage repair owns missing target voxels only. Exposed support
+        // and branch-envelope defects belong to later hierarchy subrules and
+        // must not leave a stale REPAIR intent with no actionable block.
+        return completion.trunkPercent() >= budget.trunkPercent()
                 && (completion.branchTotal() <= 0
-                        || completion.branchPercent() >= budget.branchPercent())
+                        || completion.branchPercent()
+                                >= budget.branchPercent())
                 && (completion.canopyTotal() <= 0
-                        || completion.canopyPercent() >= budget.canopyPercent());
+                        || completion.canopyPercent()
+                                >= budget.canopyPercent());
     }
 
     static boolean needsFocus(boolean transitionPending,

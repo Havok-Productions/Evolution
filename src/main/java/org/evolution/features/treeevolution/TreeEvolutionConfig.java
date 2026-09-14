@@ -32,7 +32,6 @@ final class TreeEvolutionConfig {
     private final long testingMinDelayTicks;
     private final int testingAttemptsPerStep;
     private final int testingBlocksPerStep;
-    private final long testingDamageStallTicks;
     private final boolean testingStageAccelerationEnabled;
     private final int testingSmallToMediumAge;
     private final int testingMediumToMatureAge;
@@ -78,7 +77,6 @@ final class TreeEvolutionConfig {
             long testingMinDelayTicks,
             int testingAttemptsPerStep,
             int testingBlocksPerStep,
-            long testingDamageStallTicks,
             boolean testingStageAccelerationEnabled,
             int testingSmallToMediumAge,
             int testingMediumToMatureAge,
@@ -123,7 +121,6 @@ final class TreeEvolutionConfig {
         this.testingMinDelayTicks = testingMinDelayTicks;
         this.testingAttemptsPerStep = testingAttemptsPerStep;
         this.testingBlocksPerStep = testingBlocksPerStep;
-        this.testingDamageStallTicks = testingDamageStallTicks;
         this.testingStageAccelerationEnabled = testingStageAccelerationEnabled;
         this.testingSmallToMediumAge = testingSmallToMediumAge;
         this.testingMediumToMatureAge = testingMediumToMatureAge;
@@ -177,7 +174,6 @@ final class TreeEvolutionConfig {
                 Math.max(1L, config.getLong("tree-evolution.testing.min-delay-ticks", 5L)),
                 Math.max(1, config.getInt("tree-evolution.testing.attempts-per-step", 96)),
                 Math.max(1, config.getInt("tree-evolution.testing.blocks-per-step", 96)),
-                Math.max(1L, config.getLong("tree-evolution.testing.damage-stall-ticks", 20L)),
                 config.getBoolean("tree-evolution.testing.stage-acceleration.enabled", true),
                 Math.max(1, config.getInt("tree-evolution.testing.stage-acceleration.small-to-medium-age", 4)),
                 Math.max(2, config.getInt("tree-evolution.testing.stage-acceleration.medium-to-mature-age", 12)),
@@ -209,24 +205,33 @@ final class TreeEvolutionConfig {
     }
 
     long stepTicks() {
-        if (testingEnabled) {
-            return testingStepTicks;
-        }
+        // ## This is the intake/discovery clock. World health may slow how
+        // often a new group of trees begins evolving, without slowing a tree
+        // that has already entered the constructor.
         if (!worldHealthModeEnabled) {
             return stepTicks;
         }
         return Math.max(20L, Math.round(stepTicks / worldHealthGrowthSpeedMultiplier));
     }
 
+    long constructionStepTicks() {
+        // ## Active trees use the same visible one-block cadence as testing.
+        // Stage ages and sapling reproduction remain independently paced.
+        return testingStepTicks;
+    }
+
     long delayTicksFor(TreeDna dna, TreeGrowthProfile profile, org.bukkit.block.Biome biome) {
         double biomeFactor = profile.biomeGrowthFactor(biome);
         double slowdown = Math.min(maxDamageSlowdown, 1.0D + (dna.damageCount() * damageSlowdownPerHit));
-        long minimum = testingEnabled ? testingMinDelayTicks : 20L;
-        return Math.max(minimum, Math.round((stepTicks() * slowdown) / biomeFactor));
+        return Math.max(testingMinDelayTicks,
+                Math.round((constructionStepTicks() * slowdown) / biomeFactor));
     }
 
     long damageStallMillis() {
-        return (testingEnabled ? testingDamageStallTicks : damageStallTicks) * 50L;
+        // ## Testing may accelerate environmental construction, but it must
+        // not erase a player's freshly broken log one second later. Both
+        // profiles honor the same explicit player-damage cooldown.
+        return damageStallTicks * 50L;
     }
 
     int searchRadius() {
@@ -342,11 +347,11 @@ final class TreeEvolutionConfig {
     }
 
     double stageBurstDelayMultiplier() {
-        return testingStageAccelerationEnabled() ? testingStageBurstDelayMultiplier : 0.28D;
+        return testingStageBurstDelayMultiplier;
     }
 
     double breathingSkipChance() {
-        return testingEnabled ? testingBreathingSkipChance : 0.10D;
+        return testingBreathingSkipChance;
     }
 
     TreeGrowthProfile profile(TreeSpecies species) {
@@ -381,7 +386,8 @@ final class TreeEvolutionConfig {
 
     String summary() {
         return "enabled=" + enabled
-                + ", step=" + stepTicks()
+                + ", discovery-step=" + stepTicks()
+                + ", construction-step=" + constructionStepTicks()
                 + ", radius=" + searchRadius
                 + ", attempts=" + attemptsPerStep()
                 + ", blocks=" + blocksPerStep()

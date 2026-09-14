@@ -18,6 +18,8 @@ final class TreeEvolutionReplay {
         int limit = Math.max(1, config.debugReplaySampleLimit());
         Map<TreeBlockRole, RoleStats> roleStats = new EnumMap<>(TreeBlockRole.class);
         Map<BlockProvenance, Integer> provenanceCounts = new EnumMap<>(BlockProvenance.class);
+        Map<TreePlacementAugment, Integer> augmentCounts =
+                new EnumMap<>(TreePlacementAugment.class);
         List<Map<String, Object>> samples = new ArrayList<>();
         int scanned = 0;
 
@@ -29,6 +31,7 @@ final class TreeEvolutionReplay {
             LiveProbe probe = probe(config, dna, plannedBlock, world);
             roleStats.computeIfAbsent(plannedBlock.role(), ignored -> new RoleStats()).accept(probe.provenance());
             provenanceCounts.merge(probe.provenance(), 1, Integer::sum);
+            augmentCounts.merge(plannedBlock.augment(), 1, Integer::sum);
             if (samples.size() < 80 && probe.shouldSample()) {
                 samples.add(sample(dna, plannedBlock, probe));
             }
@@ -50,7 +53,9 @@ final class TreeEvolutionReplay {
         summary.put("next-advice", advice(roleStats, provenanceCounts));
         summary.put("notes", "## Replay compares the current live world against the planned tree and names why each sampled position is placed, waiting, blocked, or unchecked.");
 
-        return new Report(summary, roleProgress(roleStats), provenanceMap(provenanceCounts), samples);
+        return new Report(summary, roleProgress(roleStats),
+                provenanceMap(provenanceCounts),
+                augmentMap(augmentCounts), samples);
     }
 
     private static LiveProbe probe(TreeEvolutionConfig config, TreeDna dna, PlannedTreeBlock plannedBlock, World world) {
@@ -69,6 +74,11 @@ final class TreeEvolutionReplay {
         row.put("relative", (plannedBlock.x() - dna.baseX()) + "," + (plannedBlock.y() - dna.baseY()) + "," + (plannedBlock.z() - dna.baseZ()));
         row.put("absolute", plannedBlock.x() + "," + plannedBlock.y() + "," + plannedBlock.z());
         row.put("role", plannedBlock.role().name());
+        row.put("planner-augment", plannedBlock.augment().name());
+        row.put("augment-contract",
+                plannedBlock.augment().contract());
+        row.put("augment-expected-roles",
+                plannedBlock.augment().expectedRoleLabel());
         row.put("planned", plannedBlock.material().name());
         row.put("live", probe.live().name());
         row.put("provenance", probe.provenance().name());
@@ -110,6 +120,20 @@ final class TreeEvolutionReplay {
         return result;
     }
 
+    private static Map<String, Integer> augmentMap(
+            Map<TreePlacementAugment, Integer> counts
+    ) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        for (TreePlacementAugment augment
+                : TreePlacementAugment.values()) {
+            int count = counts.getOrDefault(augment, 0);
+            if (count > 0) {
+                result.put(augment.name(), count);
+            }
+        }
+        return result;
+    }
+
     private static String advice(Map<TreeBlockRole, RoleStats> roleStats, Map<BlockProvenance, Integer> provenanceCounts) {
         RoleStats trunk = roleStats.get(TreeBlockRole.TRUNK);
         RoleStats branch = roleStats.get(TreeBlockRole.BRANCH);
@@ -140,6 +164,7 @@ final class TreeEvolutionReplay {
             Map<String, Object> summary,
             Map<String, Object> roleProgress,
             Map<String, Integer> provenanceCounts,
+            Map<String, Integer> augmentCounts,
             List<Map<String, Object>> samples
     ) {
     }

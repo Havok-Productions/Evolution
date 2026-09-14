@@ -11,9 +11,9 @@ final class TreeDnaShapeRules {
     }
 
     static int normalizeBranchCount(TreeSpecies species,
-            TreePersonality personality, int targetHeight, int branchCount) {
-        int minimum = TreeShapeProfile.branchCountFloor(
-                species, personality, targetHeight);
+            TreeVariant variant, TreePersonality personality,
+            int targetHeight, int branchCount) {
+        int minimum = TreeVariantPolicy.branchCountFloor(variant);
         if (targetHeight >= 18) {
             minimum = Math.max(minimum,
                     species == TreeSpecies.BIRCH ? 3 : 4);
@@ -65,10 +65,20 @@ final class TreeDnaShapeRules {
     }
 
     static int normalizeCanopyVerticalRadius(TreeSpecies species,
-            TreePersonality personality, int targetHeight, int radiusY,
+            TreeVariant variant, TreePersonality personality,
+            int targetHeight, int radiusY,
             int radiusX, int radiusZ) {
         int vertical = Math.max(1, radiusY);
         int horizontal = Math.max(radiusX, radiusZ);
+        if (variant == TreeVariant.JUNGLE_BUSH
+                || variant == TreeVariant.CHERRY_COMPACT) {
+            return Math.max(1, Math.min(2, vertical));
+        }
+        if (variant == TreeVariant.ACACIA_SINGLE_FORK
+                || variant == TreeVariant.ACACIA_MULTI_FORK
+                || variant == TreeVariant.ACACIA_WINDSWEPT) {
+            return Math.max(1, Math.min(2, vertical));
+        }
         int floor = TreeShapeProfile.canopyVerticalRadiusFloor(
                 species, horizontal);
         if (species == TreeSpecies.SPRUCE

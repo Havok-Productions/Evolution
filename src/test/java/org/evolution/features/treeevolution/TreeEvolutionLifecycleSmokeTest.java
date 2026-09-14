@@ -116,8 +116,13 @@ public final class TreeEvolutionLifecycleSmokeTest {
     ) {
         require(shape.wood() > 0 && shape.leaves() > 0,
                 label(dna) + " produced an empty structural role");
-        require(shape.branchTips() > 0,
-                label(dna) + " lost all branch-tip variation");
+        // ## A subtype may intentionally begin branchless (for example a
+        // young, clean-trunk birch). Only require tips when the stage style
+        // actually allocated a branch budget.
+        if (TreeSpeciesStageStyle.branchCount(dna) > 0) {
+            require(shape.branchTips() > 0,
+                    label(dna) + " lost all allocated branch-tip variation");
+        }
         require(shape.floatingWood() == 0,
                 label(dna) + " contains floating wood");
         require(shape.coveredBranchTips() == shape.branchTips(),
@@ -364,8 +369,11 @@ public final class TreeEvolutionLifecycleSmokeTest {
             boolean details
     ) {
         return new TreeConstructionState(
-                ownership, snapshot, transition, repair, blocker,
-                cleanupReady, retired, exposed, uncovered,
+                ownership, snapshot, transition, false, repair, blocker,
+                false, false, false, cleanupReady, false, retired,
+                !transition || !retired,
+                exposed, uncovered,
+                0, 0, uncovered,
                 trunk, branch, canopy,
                 1.0D, 1.0D, shell, 1.0D, details);
     }

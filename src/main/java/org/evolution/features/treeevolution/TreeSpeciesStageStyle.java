@@ -27,16 +27,10 @@ final class TreeSpeciesStageStyle {
 
     static int trunkWidthAt(TreeDna dna, int y) {
         int width = dna.trunkWidthAt(y);
-        int cap = switch (dna.maturityStage()) {
-            case SMALL -> dna.species() == TreeSpecies.DARK_OAK ? 2 : 1;
-            case MEDIUM -> switch (dna.species()) {
-                case DARK_OAK, JUNGLE, MANGROVE -> 2;
-                default -> 1;
-            };
-            case MATURE -> Math.max(2, dna.trunkWidth());
-            case ANCIENT -> dna.trunkWidth();
-        };
-        return Math.max(1, Math.min(width, cap));
+        int cap = TreeVariantPolicy.stageTrunkWidthCap(dna);
+        int floor = TreeVariantPolicy.stageTrunkWidthFloor(dna);
+        return Math.max(1, Math.max(
+                Math.min(floor, cap), Math.min(width, cap)));
     }
 
     static int branchCount(TreeDna dna) {
@@ -56,6 +50,7 @@ final class TreeSpeciesStageStyle {
             case CHERRY -> 1.08D;
             case OAK -> 1.0D;
         };
+        scale *= TreeVariantPolicy.branchLengthScale(dna);
         if (dna.personality() == TreePersonality.SPARSE) {
             scale *= 0.78D;
         } else if (dna.personality() == TreePersonality.WIDE
@@ -65,7 +60,17 @@ final class TreeSpeciesStageStyle {
         }
         int planned = (int) Math.round(dna.branchCount() * scale);
         planned = Math.min(planned, earlyFancyBranchCap(dna));
-        return Math.max(0, Math.min(branchCap(dna), Math.min(dna.branchCount() + ancientBonus(dna), planned)));
+        int result = Math.max(0, Math.min(
+                branchCap(dna),
+                Math.min(dna.branchCount() + ancientBonus(dna), planned)));
+        if (dna.species() == TreeSpecies.ACACIA) {
+            // ## Acacia's identity comes from a few supported high forks. Extra
+            // generic branches turn those forks into a flat wooden scaffold.
+            result = Math.min(
+                    result,
+                    AcaciaArchitecturePolicy.forkCount(dna));
+        }
+        return result;
     }
 
     static int branchLength(TreeDna dna, int rolledLength, Random random) {
@@ -110,11 +115,35 @@ final class TreeSpeciesStageStyle {
             default -> 0;
         };
         int shapeCap = Math.max(1, Math.max(canopyRadiusX(dna), canopyRadiusZ(dna)) + speciesBonus);
+        if (dna.species() == TreeSpecies.SPRUCE) {
+            // ## Conifer limbs establish the lower crown and shorten toward
+            // the leader. The generic increasing height cap produced several
+            // equally wide crown masses stacked up the trunk.
+            double crownProgress = Math.max(
+                    0.0D, (heightProgress - 0.22D) / 0.78D);
+            int coniferCap = Math.max(1, (int) Math.ceil(
+                    shapeCap * (1.0D - 0.72D * crownProgress)));
+            return Math.max(1, Math.min(length, coniferCap));
+        }
         return Math.max(1, Math.min(length, Math.min(heightCap + speciesBonus, shapeCap)));
     }
 
     static double branchStartRatio(TreeDna dna) {
         double ratio = dna.branchStartRatio();
+        if (dna.species() == TreeSpecies.ACACIA) {
+            // ## Vanilla acacia reads as a high fork with an umbrella crown.
+            // Keep young stages clear-trunked; older stages may broaden lower.
+            double floor = switch (dna.maturityStage()) {
+                case SMALL -> 0.68D;
+                case MEDIUM -> 0.62D;
+                case MATURE -> 0.54D;
+                case ANCIENT -> 0.48D;
+            };
+            return clamp(
+                    Math.max(floor, dna.branchStartRatio()
+                            + TreeVariantPolicy.branchStartAdjustment(dna)),
+                    floor, 0.76D);
+        }
         ratio += switch (dna.species()) {
             case BIRCH -> 0.08D;
             case JUNGLE -> 0.10D;
@@ -134,6 +163,7 @@ final class TreeSpeciesStageStyle {
         if (dna.personality() == TreePersonality.UMBRELLA || dna.personality() == TreePersonality.WIDE) {
             ratio -= 0.06D;
         }
+        ratio += TreeVariantPolicy.branchStartAdjustment(dna);
         return clamp(ratio, 0.24D, dna.species() == TreeSpecies.BIRCH ? 0.72D : 0.62D);
     }
 
@@ -165,7 +195,9 @@ final class TreeSpeciesStageStyle {
 
     static int canopyLayerCount(TreeDna dna) {
         int base = dna.canopyLayerCount();
-        if (dna.maturityStage().ordinal() < TreeMaturityStage.MATURE.ordinal() && dna.species() != TreeSpecies.SPRUCE) {
+        if (dna.maturityStage().ordinal()
+                < TreeMaturityStage.MATURE.ordinal()
+                && !TreeVariantPolicy.allowsEarlyLayers(dna)) {
             return 0;
         }
         if (dna.species() == TreeSpecies.SPRUCE) {
@@ -250,14 +282,20 @@ final class TreeSpeciesStageStyle {
             case CHERRY -> 0.92D;
             case OAK -> 1.0D;
         };
+        scale *= TreeVariantPolicy.horizontalScale(dna);
         if (dna.personality() == TreePersonality.UMBRELLA || dna.personality() == TreePersonality.WIDE) {
             scale += 0.18D;
         }
         int radius = (int) Math.round(baseRadius * scale);
-        int floor = dna.maturityStage() == TreeMaturityStage.SMALL ? 2 : 2;
-        if (dna.species() == TreeSpecies.DARK_OAK || dna.species() == TreeSpecies.CHERRY || dna.species() == TreeSpecies.JUNGLE) {
-            floor++;
-        }
+        double stageFloorScale = switch (dna.maturityStage()) {
+            case SMALL -> 0.58D;
+            case MEDIUM -> 0.80D;
+            case MATURE -> 1.0D;
+            case ANCIENT -> 1.10D;
+        };
+        int floor = Math.max(1, (int) Math.round(
+                TreeVariantPolicy.canopyRadiusFloor(dna, xAxis)
+                        * stageFloorScale));
         int cap = switch (dna.species()) {
             case BIRCH -> switch (dna.maturityStage()) {
                 case SMALL -> 2;
@@ -308,15 +346,20 @@ final class TreeSpeciesStageStyle {
                 case ANCIENT -> 8;
             };
         };
+        cap = Math.max(cap, floor);
         return Math.max(floor, Math.min(cap, radius));
     }
 
     private static int ancientBonus(TreeDna dna) {
-        return dna.maturityStage() == TreeMaturityStage.ANCIENT ? Math.max(1, dna.targetHeight() / 10) : 0;
+        // ## Ancient growth must remain visibly monotonic even when the
+        // integrity pass retires a weaker mature-stage branch.
+        return dna.maturityStage() == TreeMaturityStage.ANCIENT
+                ? Math.max(3, dna.targetHeight() / 10) : 0;
     }
 
     private static int stageTargetHeightFloor(TreeDna dna) {
-        int base = TreeShapeProfile.targetHeightFloor(dna.species(), dna.personality(), dna.rarity());
+        int base = TreeVariantPolicy.targetHeightFloor(
+                dna, dna.personality(), dna.rarity());
         return switch (dna.maturityStage()) {
             case SMALL -> Math.max(8, (int) Math.round(base * 0.42D));
             case MEDIUM -> Math.max(10, (int) Math.round(base * 0.68D));
@@ -326,52 +369,11 @@ final class TreeSpeciesStageStyle {
     }
 
     private static int stageVisibleHeightFloor(TreeDna dna) {
-        return switch (dna.maturityStage()) {
-            case SMALL -> switch (dna.species()) {
-                case JUNGLE, SPRUCE -> 7;
-                case DARK_OAK -> 5;
-                default -> 5;
-            };
-            case MEDIUM -> switch (dna.species()) {
-                case JUNGLE, SPRUCE -> 11;
-                case DARK_OAK -> 8;
-                default -> 8;
-            };
-            case MATURE -> switch (dna.species()) {
-                case JUNGLE -> 24;
-                case SPRUCE -> 18;
-                case BIRCH -> 16;
-                case DARK_OAK, MANGROVE, CHERRY -> 14;
-                default -> 13;
-            };
-            case ANCIENT -> switch (dna.species()) {
-                case JUNGLE -> 34;
-                case SPRUCE -> 24;
-                case BIRCH -> 20;
-                case DARK_OAK, MANGROVE, CHERRY -> 18;
-                default -> 17;
-            };
-        };
+        return TreeVariantPolicy.stageVisibleHeightFloor(dna);
     }
 
     private static int earlyFancyBranchCap(TreeDna dna) {
-        if (dna.maturityStage() == TreeMaturityStage.SMALL) {
-            return switch (dna.species()) {
-                case SPRUCE -> 5;
-                case JUNGLE, DARK_OAK, CHERRY, ACACIA -> 2;
-                case BIRCH -> 1;
-                default -> 2;
-            };
-        }
-        if (dna.maturityStage() == TreeMaturityStage.MEDIUM) {
-            return switch (dna.species()) {
-                case SPRUCE -> 9;
-                case JUNGLE, ACACIA, DARK_OAK, CHERRY -> 4;
-                case BIRCH -> 2;
-                default -> 3;
-            };
-        }
-        return Integer.MAX_VALUE;
+        return TreeVariantPolicy.earlyBranchCap(dna);
     }
 
     private static int branchCap(TreeDna dna) {
@@ -426,7 +428,9 @@ final class TreeSpeciesStageStyle {
         boolean giant = dna.rarity() == TreeRarity.LANDMARK
                 || dna.personality() == TreePersonality.ANCIENT_LANDMARK
                 || dna.targetHeight() >= 32
-                || dna.species() == TreeSpecies.JUNGLE;
+                || dna.variant() == TreeVariant.JUNGLE_MEGA
+                || dna.variant() == TreeVariant.SPRUCE_MEGA
+                || dna.variant() == TreeVariant.SPRUCE_MEGA_PINE;
         if (dna.maturityStage() == TreeMaturityStage.SMALL) {
             return switch (dna.species()) {
                 case JUNGLE, SPRUCE, MANGROVE -> giant ? 18 : 14;

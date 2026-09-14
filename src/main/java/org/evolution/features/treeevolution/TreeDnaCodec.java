@@ -16,6 +16,9 @@ final class TreeDnaCodec {
     static TreeDna read(ConfigurationSection section) {
         UUID worldId = UUID.fromString(
                 section.getString("world-id", ""));
+        int baseX = section.getInt("base.x");
+        int baseY = section.getInt("base.y");
+        int baseZ = section.getInt("base.z");
         TreeSpecies species = TreeSpecies.fromId(
                 section.getString("species", "oak"))
                 .orElse(TreeSpecies.OAK);
@@ -42,12 +45,59 @@ final class TreeDnaCodec {
                 : TreeDnaFactory.legacyCanopyLayerSpread(
                         canopyLayerCount,
                         section.getInt("canopy-radius", 2), seed);
+        java.util.List<String> originalLogs = readCoordinates(
+                section, "original-logs", "original-shape-logs",
+                worldId, baseX, baseY, baseZ);
+        java.util.List<String> originalLeaves = readCoordinates(
+                section, "original-leaves", "original-shape-leaves",
+                worldId, baseX, baseY, baseZ);
+        TreeSourcePattern sourcePattern = new TreeSourcePattern(
+                section.getInt("source-pattern.height", 0),
+                section.getInt("source-pattern.trunk-footprint",
+                        Math.max(1, trunkWidth * trunkWidth)),
+                section.getInt("source-pattern.log-count", 0),
+                section.getInt("source-pattern.leaf-count", 0),
+                section.getInt("source-pattern.branch-spread", 0),
+                section.getInt("source-pattern.canopy-radius",
+                        section.getInt("canopy-radius", 2)),
+                section.getInt("source-pattern.canopy-depth", 0),
+                section.getDouble(
+                        "source-pattern.canopy-start-ratio", 0.5D),
+                section.getInt("source-pattern.crown-tiers",
+                        canopyLayerCount),
+                section.getInt("source-pattern.trunk-drift", 0),
+                section.getBoolean("source-pattern.measured", false));
+        if (!sourcePattern.measured()
+                && (!originalLogs.isEmpty()
+                        || !originalLeaves.isEmpty())) {
+            // ## Revision-10 migration recovers architecture from the
+            // persisted pre-evolution snapshot. This preserves existing
+            // trees more accurately than guessing from old personality DNA.
+            sourcePattern = TreeSourcePattern.fromSnapshot(
+                    baseX, baseY, baseZ,
+                    originalLogs, originalLeaves);
+        }
+        TreeSourcePattern classifiedSource = sourcePattern;
+        TreeVariant variant = TreeVariant.fromId(
+                        species, section.getString("variant", ""))
+                .orElseGet(() -> classifiedSource.measured()
+                        ? TreeVariantClassifier.classify(
+                                species, classifiedSource)
+                        : TreeVariantClassifier.inferLegacy(
+                                species,
+                                personality,
+                                targetHeight,
+                                trunkWidth,
+                                section.getInt("canopy-radius", 2),
+                                canopyLayerCount));
         TreeDna dna = new TreeDna(
                 worldId,
-                section.getInt("base.x"),
-                section.getInt("base.y"),
-                section.getInt("base.z"),
+                baseX,
+                baseY,
+                baseZ,
                 species,
+                variant,
+                sourcePattern,
                 seed,
                 personality,
                 rarity,
@@ -101,14 +151,15 @@ final class TreeDnaCodec {
                 section.getInt("damage-count"),
                 section.getBoolean("stump-present", true));
         dna.restoreOriginalShape(
-                section.getStringList(
-                        "transition.original-shape-logs"),
-                section.getStringList(
-                        "transition.original-shape-leaves"),
-                section.getStringList(
-                        "transition.retired-original-leaves"),
-                section.getStringList("transition.evolved-logs"),
-                section.getStringList("transition.evolved-leaves"),
+                originalLogs,
+                originalLeaves,
+                readCoordinates(section, "retired-original-leaves",
+                        "retired-original-leaves", worldId,
+                        baseX, baseY, baseZ),
+                readCoordinates(section, "evolved-logs", "evolved-logs",
+                        worldId, baseX, baseY, baseZ),
+                readCoordinates(section, "evolved-leaves", "evolved-leaves",
+                        worldId, baseX, baseY, baseZ),
                 section.getInt("transition.ownership-version", 0));
         return dna;
     }
@@ -119,6 +170,29 @@ final class TreeDnaCodec {
         section.set("base.y", dna.baseY());
         section.set("base.z", dna.baseZ());
         section.set("species", dna.species().id());
+        section.set("variant", dna.variant().id());
+        section.set(
+                "source-pattern.height", dna.sourcePattern().height());
+        section.set("source-pattern.trunk-footprint",
+                dna.sourcePattern().trunkFootprint());
+        section.set("source-pattern.log-count",
+                dna.sourcePattern().logCount());
+        section.set("source-pattern.leaf-count",
+                dna.sourcePattern().leafCount());
+        section.set("source-pattern.branch-spread",
+                dna.sourcePattern().branchSpread());
+        section.set("source-pattern.canopy-radius",
+                dna.sourcePattern().canopyRadius());
+        section.set("source-pattern.canopy-depth",
+                dna.sourcePattern().canopyDepth());
+        section.set("source-pattern.canopy-start-ratio",
+                dna.sourcePattern().canopyStartRatio());
+        section.set("source-pattern.crown-tiers",
+                dna.sourcePattern().crownTiers());
+        section.set("source-pattern.trunk-drift",
+                dna.sourcePattern().trunkDrift());
+        section.set("source-pattern.measured",
+                dna.sourcePattern().measured());
         section.set("seed", dna.seed());
         section.set("personality", dna.personality().name());
         section.set("rarity", dna.rarity().name());
@@ -164,17 +238,17 @@ final class TreeDnaCodec {
                 "growth.stage-cleanup-burst", dna.stageCleanupBurst());
         section.set(
                 "growth.stage-growth-burst", dna.stageGrowthBurst());
-        section.set("transition.original-shape-logs",
-                dna.originalShapeLogs().stream().sorted().toList());
-        section.set("transition.original-shape-leaves",
-                dna.originalShapeLeaves().stream().sorted().toList());
-        section.set("transition.retired-original-leaves",
-                dna.retiredOriginalShapeLeaves()
-                        .stream().sorted().toList());
-        section.set("transition.evolved-logs",
-                dna.evolvedShapeLogs().stream().sorted().toList());
-        section.set("transition.evolved-leaves",
-                dna.evolvedShapeLeaves().stream().sorted().toList());
+        section.set("transition.coordinates.format", "relative-v1");
+        section.set("transition.coordinates.original-logs",
+                writeCoordinates(dna, dna.originalShapeLogs()));
+        section.set("transition.coordinates.original-leaves",
+                writeCoordinates(dna, dna.originalShapeLeaves()));
+        section.set("transition.coordinates.retired-original-leaves",
+                writeCoordinates(dna, dna.retiredOriginalShapeLeaves()));
+        section.set("transition.coordinates.evolved-logs",
+                writeCoordinates(dna, dna.evolvedShapeLogs()));
+        section.set("transition.coordinates.evolved-leaves",
+                writeCoordinates(dna, dna.evolvedShapeLeaves()));
         section.set("transition.ownership-version",
                 dna.evolutionOwnershipVersion());
         section.set("maturity-stage", dna.maturityStage().name());
@@ -191,6 +265,59 @@ final class TreeDnaCodec {
         } catch (RuntimeException exception) {
             return TreeMaturityStage.SMALL;
         }
+    }
+
+    private static java.util.List<String> readCoordinates(
+            ConfigurationSection section,
+            String compactName,
+            String legacyName,
+            UUID worldId,
+            int baseX,
+            int baseY,
+            int baseZ) {
+        String compactPath = "transition.coordinates." + compactName;
+        if (!section.contains(compactPath)) {
+            return section.getStringList("transition." + legacyName);
+        }
+        java.util.List<String> decoded = new java.util.ArrayList<>();
+        for (String encoded : section.getStringList(compactPath)) {
+            String[] parts = encoded.split(",", -1);
+            if (parts.length != 3) {
+                continue;
+            }
+            try {
+                int x = baseX + Integer.parseInt(parts[0]);
+                int y = baseY + Integer.parseInt(parts[1]);
+                int z = baseZ + Integer.parseInt(parts[2]);
+                decoded.add(worldId + ":" + x + ":" + y + ":" + z);
+            } catch (NumberFormatException ignored) {
+                // ## One malformed receipt must not discard the remaining DNA.
+            }
+        }
+        return java.util.List.copyOf(decoded);
+    }
+
+    private static java.util.List<String> writeCoordinates(
+            TreeDna dna, java.util.Set<String> coordinates) {
+        java.util.List<String> encoded = new java.util.ArrayList<>();
+        for (String coordinate : coordinates) {
+            String[] parts = coordinate.split(":", -1);
+            if (parts.length < 4) {
+                continue;
+            }
+            try {
+                int x = Integer.parseInt(parts[parts.length - 3]);
+                int y = Integer.parseInt(parts[parts.length - 2]);
+                int z = Integer.parseInt(parts[parts.length - 1]);
+                encoded.add((x - dna.baseX()) + ","
+                        + (y - dna.baseY()) + ","
+                        + (z - dna.baseZ()));
+            } catch (NumberFormatException ignored) {
+                // ## Legacy/custom malformed coordinates are skipped safely.
+            }
+        }
+        encoded.sort(String::compareTo);
+        return java.util.List.copyOf(encoded);
     }
 
     private static TreePersonality parsePersonality(String value) {

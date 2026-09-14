@@ -76,7 +76,8 @@ public final class TreeCanopyTransitionPolicySmokeTest {
                 .normalize(legacySparse, TreeMaturityStage.MEDIUM);
         require(migration.changed()
                         && migration.dna().shapeRevision()
-                                == TreeDna.CURRENT_SHAPE_REVISION,
+                                == TreeDna.requiredShapeRevision(
+                                        migration.dna().species()),
                 "legacy DNA must receive the current canopy shape revision");
         require(migration.dna().personality() == TreePersonality.BALANCED,
                 "legacy sparse oak must migrate to a full balanced crown");
@@ -105,7 +106,7 @@ public final class TreeCanopyTransitionPolicySmokeTest {
 
         TreeDna completedRevisionFive = dna(
                 TreePersonality.BALANCED,
-                TreeDna.CURRENT_SHAPE_REVISION - 1);
+                TreeDna.requiredShapeRevision(TreeSpecies.OAK) - 1);
         TreeDnaNormalizer.NormalizedDna ownershipRecapture =
                 new TreeDnaNormalizer().normalize(
                         completedRevisionFive,
@@ -117,6 +118,60 @@ public final class TreeCanopyTransitionPolicySmokeTest {
         require(!ownershipRecapture.dna().hasOriginalShapeSnapshot(),
                 "offline normalization must wait for a live Folia-owned candidate to capture source coordinates");
 
+        TreeDna legacyAcacia = dna(
+                TreeSpecies.ACACIA,
+                TreePersonality.UMBRELLA,
+                TreeDna.requiredShapeRevision(TreeSpecies.ACACIA) - 1);
+        String previousAcaciaLeaf = legacyAcacia.worldId()
+                + ":4:70:0";
+        legacyAcacia.markEvolvedLeaf(previousAcaciaLeaf);
+        TreeDna migratedAcacia = new TreeDnaNormalizer().normalize(
+                legacyAcacia, TreeMaturityStage.MEDIUM).dna();
+        require(migratedAcacia.isOriginalShapeLeaf(previousAcaciaLeaf)
+                        && !migratedAcacia.evolvedShapeLeaves()
+                                .contains(previousAcaciaLeaf),
+                "legacy acacia foliage must reopen as prunable source evidence");
+
+        TreeDna completedOak = dna(
+                TreeSpecies.OAK,
+                TreePersonality.BALANCED,
+                TreeDna.requiredShapeRevision(TreeSpecies.OAK) - 1);
+        String previousOakLog = completedOak.worldId()
+                + ":0:70:0";
+        String previousOakLeaf = completedOak.worldId()
+                + ":3:70:0";
+        completedOak.markEvolvedBlock(
+                previousOakLog, TreeBlockRole.BRANCH);
+        completedOak.markEvolvedLeaf(previousOakLeaf);
+        TreeDna migratedOak = new TreeDnaNormalizer().normalize(
+                completedOak, TreeMaturityStage.MEDIUM).dna();
+        require(migratedOak.hasOriginalShapeSnapshot()
+                        && migratedOak.isOriginalShapeLeaf(previousOakLeaf)
+                        && migratedOak.evolvedShapeLogs()
+                                .contains(previousOakLog)
+                        && !migratedOak.evolvedShapeLeaves()
+                                .contains(previousOakLeaf),
+                "completed oak receipts must reopen as an immutable "
+                        + "revision-12 migration snapshot");
+
+        TreeDna currentOak = dna(
+                TreeSpecies.OAK,
+                TreePersonality.BALANCED,
+                TreeDna.requiredShapeRevision(TreeSpecies.OAK));
+        String currentOakLeaf = currentOak.worldId()
+                + ":3:70:1";
+        currentOak.markEvolvedLeaf(currentOakLeaf);
+        TreeDnaNormalizer.NormalizedDna untouchedOak =
+                new TreeDnaNormalizer().normalize(
+                        currentOak, TreeMaturityStage.MEDIUM);
+        require(untouchedOak.dna().shapeRevision()
+                        == TreeDna.requiredShapeRevision(TreeSpecies.OAK)
+                        && !untouchedOak.dna().hasOriginalShapeSnapshot()
+                        && untouchedOak.dna().evolvedShapeLeaves()
+                                .contains(currentOakLeaf),
+                "revision-13 oak must not reopen receipts or adopt the "
+                        + "acacia-only revision");
+
         System.out.println("Tree canopy transition policy smoke test passed: "
                 + "target-canopy-preserved=true planned-wood-cleared=true "
                 + "corridor=" + policy.corridorMinimumY() + ".."
@@ -125,13 +180,23 @@ public final class TreeCanopyTransitionPolicySmokeTest {
     }
 
     private static TreeDna dna() {
-        return dna(TreePersonality.BALANCED, TreeDna.CURRENT_SHAPE_REVISION);
+        return dna(TreePersonality.BALANCED,
+                TreeDna.requiredShapeRevision(TreeSpecies.OAK));
     }
 
     private static TreeDna dna(TreePersonality personality, int shapeRevision) {
+        return dna(TreeSpecies.OAK, personality, shapeRevision);
+    }
+
+    private static TreeDna dna(
+            TreeSpecies species,
+            TreePersonality personality,
+            int shapeRevision) {
         return new TreeDna(
                 UUID.nameUUIDFromBytes("canopy-transition-smoke".getBytes()),
-                0, 64, 0, TreeSpecies.OAK, 42L,
+                0, 64, 0, species,
+                TreeVariant.defaultFor(species),
+                TreeSourcePattern.unknown(), 42L,
                 personality, TreeRarity.COMMON,
                 16, 6, 2, 4, 0,
                 4, 4, 2, 4, 0.74D,

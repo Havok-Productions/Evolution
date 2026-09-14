@@ -131,11 +131,12 @@ mushroom-types:
 # loaded chunks, current Folia regions, and nearby-player areas.
 meadow-growth:
   enabled: true
-  step-ticks: 60
+  # ## Low plants use this fast cadence in both testing and survival profiles.
+  step-ticks: 10
   # 0 means use the server view distance in blocks.
   search-radius: 0
-  attempts-per-step: 32
-  blocks-per-step: 2
+  attempts-per-step: 128
+  blocks-per-step: 8
   required-player-distance-chunks: 6
   # ## A small bounded frontier pass seeks exposed dirt around sampled grass
   # before normal plant placement. This raises real grass conversion without
@@ -150,8 +151,8 @@ meadow-growth:
   # ## Grass, ferns, and flowers may reclaim leaf-litter tiles. Replacements
   # are counted and traced as growth.leaf-litter-replaced.
   replace-leaf-litter: true
-  # Fast test mode lets grass, flowers, and forest edges visibly spread while
-  # world-health-mode is still enabled globally.
+  # ## Compatibility mirror for older configurations. Effective plant pacing
+  # uses the faster values from the normal/testing pair in every profile.
   testing:
     enabled: true
     step-ticks: 10
@@ -210,8 +211,9 @@ ecology-evolution:
 # layouts and source JSON are not copied into generated output.
 tree-evolution:
   enabled: true
-  # 45 seconds at 20 TPS before world-health mode. With 0.15x health mode this
-  # becomes about 5 minutes between eligible natural evolution steps per tree.
+  # ## Slow intake clock for discovering another batch of trees. With 0.15x
+  # world health, 900 ticks becomes about 5 minutes. Trees already selected
+  # by the constructor still build at testing.step-ticks below.
   step-ticks: 900
   # 0 means use the server view distance in blocks.
   search-radius: 0
@@ -221,13 +223,12 @@ tree-evolution:
   # global world-health slowdown for tree evolution only.
   testing:
     enabled: true
-    # Fast but bounded test pacing: visible live growth without making every
-    # player tick rewrite the whole nearby forest.
+    # ## Shared active-construction pace in both testing and survival. Runtime
+    # profile still controls stage acceleration and sapling reproduction.
     step-ticks: 5
     min-delay-ticks: 2
     attempts-per-step: 48
     blocks-per-step: 1
-    damage-stall-ticks: 20
     stage-acceleration:
       enabled: true
       # ## Testing stage gates. Age increases when this tree places/prunes one
@@ -262,6 +263,9 @@ tree-evolution:
   # MEDIUM is the current fancy-tree ceiling, so reproduction begins there.
   reproduction:
     enabled: true
+    # ## Tree construction is always fast after selection; reproduction stays
+    # at survival pace unless this separate test-only override is requested.
+    accelerate-in-testing: false
     minimum-stage: MEDIUM
     minimum-age: 20
     medium-chance-percent: 4.5
@@ -283,7 +287,7 @@ tree-evolution:
       candidate-rolls-per-pass: 4
     # A successful parent waits ten minutes before planting another sapling.
     cooldown-ticks: 12000
-    # Testing keeps the same placement rules but makes reproduction visible.
+    # Used only when accelerate-in-testing is explicitly enabled above.
     testing-chance-multiplier: 4.0
     testing-cooldown-ticks: 200
   # ## MEDIUM is the fancy-tree form: a visible trunk, real branches, and a cloud-like crown.
@@ -466,6 +470,9 @@ wind:
     # ## Visible falling leaves can be disabled without disabling wind/litter.
     enabled: true
   particles:
+    # ## Scales all falling-leaf emissions without changing the steady wind
+    # cadence. Existing counts remain useful as clear/rain/storm proportions.
+    intensity-multiplier: 0.30
     clear-count: 16
     rain-count: 8
     storm-count: 24
@@ -539,6 +546,9 @@ waves:
   enabled: true
   simulation-radius: 120
   render-radius: 100
+  # ## One complete traveling wave is visible to each player at a time. The
+  # same wave remains selected while it travels and fizzles at the shoreline.
+  maximum-visible-fronts-per-player: 1
   update-interval-ticks: 6
   column-step: 1
   # ## Coherent frames prevent staggered scan holes; submerged samples avoid terrain lookup.
@@ -622,7 +632,7 @@ waves:
     # ## Per player, each stable 64-block coast area renders at most this many
     # incoming fronts. Shared world waves keep simulating; excess visuals are hidden
     # with stable, evenly spaced selection so movement does not reshuffle the coast.
-    maximum-incoming-fronts-per-coast-area-per-player: 3
+    maximum-incoming-fronts-per-coast-area-per-player: 1
   shoreline-runup:
     enabled: true
     max-distance: 6

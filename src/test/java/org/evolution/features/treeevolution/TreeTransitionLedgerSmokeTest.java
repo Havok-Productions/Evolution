@@ -29,6 +29,19 @@ public final class TreeTransitionLedgerSmokeTest {
         require(!captured.countsAsOwnedLog("world:30:70:30"),
                 "A neighboring log must not satisfy this tree's model.");
 
+        TreeTransitionLedger sourceLogReshapedAsLeaf =
+                captured.recordEvolvedLeaf(sourceLog);
+        require(sourceLogReshapedAsLeaf.countsAsEvolvedLeaf(sourceLog)
+                        && !sourceLogReshapedAsLeaf
+                                .countsAsOwnedLog(sourceLog),
+                "A planned canopy role must override historical source wood.");
+        TreeTransitionLedger completedRoleSwap =
+                sourceLogReshapedAsLeaf.completeTransition();
+        require(!completedRoleSwap.countsAsOwnedLog(sourceLog)
+                        && completedRoleSwap
+                                .countsAsEvolvedLeaf(sourceLog),
+                "Completing a transition restored a retired source-log role.");
+
         TreeTransitionLedger reformed = captured.recordEvolvedLeaf(sourceLeaf);
         require(reformed.countsAsEvolvedLeaf(sourceLeaf),
                 "An explicitly reformed source leaf must satisfy the envelope.");

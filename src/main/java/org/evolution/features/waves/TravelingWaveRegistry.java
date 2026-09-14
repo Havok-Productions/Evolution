@@ -17,7 +17,9 @@ final class TravelingWaveRegistry {
     private static final long FRONT_FADE_IN_TICKS = 20L;
     private static final int SOURCE_CELL_SIZE = 192;
     private static final int SOURCE_SEARCH_RADIUS = 80;
-    private static final int FRONTS_PER_SOURCE = 4;
+    // ## A static source owns one complete wave lifecycle at a time. This
+    // prevents hidden sibling fronts from competing behind the viewer cap.
+    private static final int FRONTS_PER_SOURCE = 1;
     private static final int COAST_SEGMENT_SIZE = 48;
     private static final int SOURCE_CACHE_LIMIT = 512;
     private static final long SOURCE_RETENTION_MILLIS = 600_000L;
@@ -42,6 +44,7 @@ final class TravelingWaveRegistry {
             WaveProfile profile, OvalWaveSettings settings, double windX, double windZ,
             int renderRadius, int simulationRadius,
             int maximumIncomingFrontsPerCoastAreaPerPlayer,
+            int maximumVisibleFrontsPerPlayer,
             WaveLakeFlowCache.Snapshot topology) {
         double moved = 0.0D;
         int shoreGuided = 0;
@@ -101,7 +104,11 @@ final class TravelingWaveRegistry {
         WaveCoastAreaViewPolicy.Selection distribution =
                 WaveCoastAreaViewPolicy.select(
                         visible, previousVisible, maximumIncomingFrontsPerCoastAreaPerPlayer);
-        List<TravelingWaveFront> snapshot = distribution.fronts();
+        WavePlayerFrontViewPolicy.Selection playerSelection =
+                WavePlayerFrontViewPolicy.select(
+                        distribution.fronts(), previousVisible,
+                        playerX, playerZ, maximumVisibleFrontsPerPlayer);
+        List<TravelingWaveFront> snapshot = playerSelection.fronts();
         int markerBudget = 8;
         for (Map.Entry<WaveCoastAreaViewPolicy.CoastArea,
                 WaveCoastAreaViewPolicy.AreaDistribution> entry
@@ -117,6 +124,15 @@ final class TravelingWaveRegistry {
                     + " selected-ids=" + entry.getValue().selectedIds()
                     + " viewer-scoped=true evenly-spaced=true");
         }
+        if (playerSelection.suppressed() > 0) {
+            steeringTransitions.add("[VIEW][PLAYER-WAVE-CAP] candidates="
+                    + distribution.fronts().size()
+                    + " selected-ids=" + snapshot.stream()
+                            .map(TravelingWaveFront::id).toList()
+                    + " suppressed=" + playerSelection.suppressed()
+                    + " limit=" + maximumVisibleFrontsPerPlayer
+                    + " ## one stable wave remains visible until its lifecycle ends");
+        }
         if (snapshot.isEmpty()) {
             visibleByPlayer.remove(playerId);
         } else {
@@ -130,7 +146,8 @@ final class TravelingWaveRegistry {
         SourceSummary sources = new SourceSummary(
                 activeSources, snapshot.size(), SOURCE_CELL_SIZE,
                 distribution.coastAreas(), distribution.limitedAreas(),
-                distribution.suppressedFronts(), new ArrayList<>(anchors));
+                distribution.suppressedFronts() + playerSelection.suppressed(),
+                new ArrayList<>(anchors));
         return new Update(snapshot, moved, shoreGuided, impacts, mergedFronts,
                 lifecycle, directionSummary(snapshot), sources);
     }
@@ -164,7 +181,8 @@ final class TravelingWaveRegistry {
                 continue;
             }
             LakeWaveFlowField.Cell cell = topology.cell(frontX, frontZ);
-            if (cell.shoreGuided() && front.beginPassageProbe(tick)) {
+            if (!front.obstaclePassageActive()
+                    && cell.shoreGuided() && front.beginPassageProbe(tick)) {
                 PassageMeasurement passage = localPassage(topology, frontX, frontZ);
                 int waterSpan = passage.span();
                 int nearbyFronts = nearbyFrontCount(state.fronts, front, waterSpan);
@@ -177,7 +195,8 @@ final class TravelingWaveRegistry {
                             + " nearby-fronts=" + nearbyFronts
                             + " target-half-width=" + rounded(front.passageHalfWidth()));
                 }
-                if (isSmallEnclosedWater(cell, passage)) {
+                if (WaveWaterBodyPolicy.classify(
+                        cell, passage.span()).channelLocked()) {
                     TravelingWaveFront.Direction channel = resolveChannelCourse(
                             state, passage, windX, windZ);
                     if (front.lockChannelCourse(channel.x(), channel.z())) {
@@ -186,7 +205,14 @@ final class TravelingWaveRegistry {
                     }
                 }
             }
-            boolean detectedShore = !front.channelCourseLocked()
+            if (!front.obstaclePassageActive() && front.hasShoreTarget()
+                    && front.lockedShoreDistance() <= 4.0D) {
+                TravelingWaveFront.Direction shoreCourse = front.lockedShoreDirection();
+                beginObstaclePassage(front, topology,
+                        shoreCourse.x(), shoreCourse.z(), steeringTransitions);
+            }
+            boolean detectedShore = !front.obstaclePassageActive()
+                    && !front.channelCourseLocked()
                     && cell.shoreGuided()
                     && cell.shoreDistance() <= SHORE_STEERING_DISTANCE
                     && (cell.directionX() != 0 || cell.directionZ() != 0);
@@ -195,16 +221,19 @@ final class TravelingWaveRegistry {
                         cell.shoreDistance());
             }
             boolean channelLocked = front.channelCourseLocked();
-            boolean guided = !channelLocked && front.hasShoreTarget();
-            TravelingWaveFront.Direction baseCourse = channelLocked
-                    ? front.channelCourse()
+            boolean guided = !front.obstaclePassageActive()
+                    && !channelLocked && front.hasShoreTarget();
+            boolean obstacleLocked = front.obstaclePassageActive();
+            TravelingWaveFront.Direction baseCourse = obstacleLocked
+                    ? new TravelingWaveFront.Direction(front.headingX(), front.headingZ())
+                    : channelLocked ? front.channelCourse()
                     : guided ? front.lockedShoreDirection()
                             : new TravelingWaveFront.Direction(windX, windZ);
             int courseDistance = guided
                     ? (int) Math.round(Math.min(SHORE_STEERING_DISTANCE,
                             front.lockedShoreDistance()))
                     : SHORE_STEERING_DISTANCE;
-            TravelingWaveFront.Direction course = channelLocked
+            TravelingWaveFront.Direction course = channelLocked || obstacleLocked
                     ? baseCourse
                     : front.courseDirection(
                             baseCourse.x(), baseCourse.z(), courseDistance, guided);
@@ -227,7 +256,14 @@ final class TravelingWaveRegistry {
                 continue;
             }
 
-            if (!front.fizzling() && topology.isWater(nextX, nextZ)) {
+            boolean crossedObstacle = false;
+            if (!front.fizzling() && !topology.isWater(nextX, nextZ)
+                    && !front.obstaclePassageActive()) {
+                crossedObstacle = beginObstaclePassage(front, topology,
+                        front.headingX(), front.headingZ(), steeringTransitions);
+            }
+            if (!front.fizzling() && (topology.isWater(nextX, nextZ)
+                    || front.obstaclePassageActive() || crossedObstacle)) {
                 front.commitMotion(motion);
                 moved += motion.distance();
             } else if (!front.fizzling()) {
@@ -235,7 +271,8 @@ final class TravelingWaveRegistry {
                 shoreFizzleIds.add(front.id());
                 impacts++;
             }
-            if (!front.fizzling() && detectedShore && cell.shoreDistance() <= 2) {
+            if (!front.fizzling() && !front.obstaclePassageActive()
+                    && detectedShore && cell.shoreDistance() <= 2) {
                 front.beginShoreFizzle(tick);
                 shoreFizzleIds.add(front.id());
                 impacts++;
@@ -377,8 +414,8 @@ final class TravelingWaveRegistry {
         Candidate best = null;
         long sequence = state.spawnSequence;
         long waveSeed = state.seed ^ sequence;
-        TravelingWaveFront.Kind kind = kindFor(sequence);
-        double minimumSeparation = profile.wavelength() * switch (kind) {
+        TravelingWaveFront.Kind requestedKind = kindFor(sequence);
+        double minimumSeparation = profile.wavelength() * switch (requestedKind) {
             case CROSSING -> 0.30D;
             case GIANT -> 0.55D;
             case STANDARD, MERGED -> 0.42D;
@@ -411,6 +448,13 @@ final class TravelingWaveRegistry {
         }
         best = adjustSmallWaterStart(best, topology, state.fronts,
                 minimumSeparation, sourceTransitions);
+        PassageMeasurement spawnPassage = localPassage(
+                topology, best.x(), best.z());
+        WaveWaterBodyPolicy.Classification waterBody =
+                WaveWaterBodyPolicy.classify(best.cell(), spawnPassage.span());
+        TravelingWaveFront.Kind kind = waterBody.permittedKind(requestedKind);
+        boolean channelLocked = waterBody.channelLocked();
+        boolean largeOpenWater = waterBody.broadWater();
 
         double shapeSeed = hash01(waveSeed, 901L);
         double widthMinimum = Math.max(0.42D, settings.widthMinScale());
@@ -428,6 +472,8 @@ final class TravelingWaveRegistry {
         } else if (kind == TravelingWaveFront.Kind.CROSSING) {
             halfWidth *= 1.08D;
         }
+        halfWidth = waterBody.fitHalfWidth(halfWidth);
+        halfLength = waterBody.fitHalfLength(halfLength);
         double targetHalfWidth = halfWidth;
         double targetHalfLength = halfLength;
         double energy = Math.max(0.72D, Math.min(1.0D,
@@ -435,11 +481,6 @@ final class TravelingWaveRegistry {
         if (kind == TravelingWaveFront.Kind.GIANT) {
             energy = Math.max(0.92D, energy);
         }
-        PassageMeasurement spawnPassage = localPassage(
-                topology, best.x(), best.z());
-        boolean channelLocked = isSmallEnclosedWater(best.cell(), spawnPassage);
-        boolean largeOpenWater = !channelLocked
-                && isLargeOpenWater(best.cell(), spawnPassage);
         ShoreAngleDecision shoreAngles = largeOpenWater
                 ? shoreAngleDecision(topology, best.x(), best.z())
                 : ShoreAngleDecision.notApplicable();
@@ -503,6 +544,14 @@ final class TravelingWaveRegistry {
                     + " half-width=" + rounded(front.halfWidth()));
         }
         state.spawnSequence++;
+        sourceTransitions.add("[SOURCE][WATER-BODY] id=" + front.id()
+                + " body=" + waterBody.body()
+                + " passage-span=" + waterBody.passageSpan()
+                + " requested-kind=" + requestedKind
+                + " permitted-kind=" + front.kind()
+                + " half-width=" + rounded(front.halfWidth())
+                + " half-length=" + rounded(front.halfLength())
+                + " giant-coast-only=true");
         if (channelLocked) {
             front.lockChannelCourse(channelCourse.x(), channelCourse.z());
             sourceTransitions.add(channelLockMarker(front, spawnPassage,
@@ -608,15 +657,27 @@ final class TravelingWaveRegistry {
         return narrowest;
     }
 
-    private boolean isLargeOpenWater(LakeWaveFlowField.Cell cell,
-            PassageMeasurement passage) {
-        if (!cell.shoreGuided()) {
-            return true;
+    private boolean beginObstaclePassage(TravelingWaveFront front,
+            WaveLakeFlowCache.Snapshot topology, double directionX, double directionZ,
+            List<String> steeringTransitions) {
+        WaveObstaclePolicy.Crossing crossing = WaveObstaclePolicy.findCrossing(
+                topology, front.x(), front.z(), directionX, directionZ, front);
+        if (!crossing.crosses()) {
+            return false;
         }
-        return cell.sourceDistance() > SMALL_ENCLOSED_MAX_SOURCE_DISTANCE
-                || passage.span() < 0
-                || passage.span() > SMALL_ENCLOSED_WATER_SPAN;
+        front.beginObstaclePassage(crossing.landCells(), crossing.travelDistance(),
+                directionX, directionZ, crossing.energyScale());
+        steeringTransitions.add("[OBSTACLE][BRIDGE] id=" + front.id()
+                + " kind=" + front.kind()
+                + " land-cells=" + crossing.landCells()
+                + " resume=" + crossing.resumeX() + "," + crossing.resumeZ()
+                + " travel-distance=" + crossing.travelDistance()
+                + " energy-scale=" + rounded(front.obstacleEnergyScale())
+                + " partial-front-attenuation=true"
+                + " land-columns-rendered=false");
+        return true;
     }
+
     // ## A broad front is the default. It only divides into smaller angled fronts
     // when a well-known local water field contains materially different coast paths.
     ShoreAngleDecision shoreAngleDecision(WaveLakeFlowCache.Snapshot topology,
@@ -685,14 +746,6 @@ final class TravelingWaveRegistry {
                 knownRatio, directionSamples, representedSectors, coherence);
     }
 
-    private boolean isSmallEnclosedWater(LakeWaveFlowField.Cell cell,
-            PassageMeasurement passage) {
-        return cell.shoreGuided()
-                && passage.span() > 0
-                && passage.span() <= SMALL_ENCLOSED_WATER_SPAN
-                && cell.sourceDistance() > 0
-                && cell.sourceDistance() <= SMALL_ENCLOSED_MAX_SOURCE_DISTANCE;
-    }
     private TravelingWaveFront.Direction resolveChannelCourse(
             SourceFronts state, PassageMeasurement passage,
             double windX, double windZ) {
@@ -959,6 +1012,15 @@ final class TravelingWaveRegistry {
                 break;
             }
         }
+        PassageMeasurement mergedPassage = localPassage(
+                topology, (int) Math.round(centerX), (int) Math.round(centerZ));
+        WaveWaterBodyPolicy.Classification mergedWaterBody =
+                WaveWaterBodyPolicy.classify(
+                        topology.cell((int) Math.round(centerX), (int) Math.round(centerZ)),
+                        mergedPassage.span());
+        mergedKind = mergedWaterBody.permittedKind(mergedKind);
+        mergedHalfWidth = mergedWaterBody.fitHalfWidth(mergedHalfWidth);
+        mergedHalfLength = mergedWaterBody.fitHalfLength(mergedHalfLength);
         TravelingWaveFront combined = new TravelingWaveFront(id, mergedKind, 0.0D,
                 centerX, centerZ, headingX, headingZ,
                 mergedHalfLength, mergedHalfWidth, 0.98D, tick, true,

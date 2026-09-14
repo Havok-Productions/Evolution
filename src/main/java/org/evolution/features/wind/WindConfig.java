@@ -21,6 +21,7 @@ final class WindConfig {
     private final int clearParticleCount;
     private final int rainParticleCount;
     private final int stormParticleCount;
+    private final double particleIntensityMultiplier;
     private final int debugRecentEvents;
 
     private WindConfig(
@@ -41,6 +42,7 @@ final class WindConfig {
             int clearParticleCount,
             int rainParticleCount,
             int stormParticleCount,
+            double particleIntensityMultiplier,
             int debugRecentEvents
     ) {
         this.enabled = enabled;
@@ -60,6 +62,7 @@ final class WindConfig {
         this.clearParticleCount = clearParticleCount;
         this.rainParticleCount = rainParticleCount;
         this.stormParticleCount = stormParticleCount;
+        this.particleIntensityMultiplier = particleIntensityMultiplier;
         this.debugRecentEvents = debugRecentEvents;
     }
 
@@ -84,6 +87,8 @@ final class WindConfig {
                 Math.max(1, config.getInt("wind.particles.clear-count", 16)),
                 Math.max(1, config.getInt("wind.particles.rain-count", 8)),
                 Math.max(1, config.getInt("wind.particles.storm-count", 24)),
+                clamp(config.getDouble(
+                        "wind.particles.intensity-multiplier", 0.30D)),
                 Math.max(0, config.getInt("wind.debug.recent-events", 40))
         );
     }
@@ -143,13 +148,16 @@ final class WindConfig {
     }
 
     int particleCount(boolean storm, boolean rain) {
+        int configured;
         if (storm) {
-            return stormParticleCount;
+            configured = stormParticleCount;
+        } else if (rain) {
+            configured = rainParticleCount;
+        } else {
+            configured = clearParticleCount;
         }
-        if (rain) {
-            return rainParticleCount;
-        }
-        return clearParticleCount;
+        return Math.max(1, (int) Math.round(
+                configured * particleIntensityMultiplier));
     }
 
     int debugRecentEvents() {
@@ -169,6 +177,14 @@ final class WindConfig {
                 + ", litter-max-per-chunk=" + maxLeafLitterPerChunk
                 + ", litter-stack-radius=" + leafLitterStackSearchRadius
                 + ", particles=" + clearParticleCount + "/" + rainParticleCount + "/" + stormParticleCount
+                + " x" + particleIntensityMultiplier
                 + ", debug-events=" + debugRecentEvents;
+    }
+
+    private static double clamp(double value) {
+        if (!Double.isFinite(value)) {
+            return 0.30D;
+        }
+        return Math.max(0.05D, Math.min(1.0D, value));
     }
 }

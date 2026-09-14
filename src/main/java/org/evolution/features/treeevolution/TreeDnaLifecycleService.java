@@ -57,6 +57,7 @@ final class TreeDnaLifecycleService {
                 continue;
             }
             if (treeDna.remove(dna.key(), dna)) {
+                repository.removeOwnership(dna.key());
                 invalidateRuntimeState.accept(dna.key());
                 removed++;
                 plugin.pathDebug().traceSampled(
@@ -101,6 +102,7 @@ final class TreeDnaLifecycleService {
                 continue;
             }
             normalized++;
+            repository.refreshOwnership(result.dna());
             invalidateRuntimeState.accept(dna.key());
             diagnostics.recordDnaNormalized(
                     config, dna, result.dna(), result.summary());

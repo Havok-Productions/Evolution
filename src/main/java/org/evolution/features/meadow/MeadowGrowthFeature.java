@@ -1,7 +1,7 @@
 package org.evolution.features.meadow;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
@@ -10,7 +10,6 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
-import org.bukkit.block.Biome;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.Bisected;
@@ -69,6 +68,13 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
             Material.CORNFLOWER,
             Material.LILY_OF_THE_VALLEY,
             Material.PINK_PETALS
+    );
+    private static final Set<Material> RARE_SPREAD_PLANTS = Set.of(
+            Material.PUMPKIN,
+            Material.MELON,
+            Material.SWEET_BERRY_BUSH,
+            Material.SUGAR_CANE,
+            Material.DEAD_BUSH
     );
 
     private final EvolutionPlugin plugin;
@@ -415,7 +421,16 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
             return false;
         }
 
-        Material plant = choosePlant(target.getBiome(), target, currentConfig);
+        Material plant = chooseSpreadPlant(target, currentConfig);
+        if (plant == null) {
+            plugin.pathDebug().traceSampled(plugin, "meadow",
+                    "growth.blocked.no-existing-plant-source",
+                    format(target)
+                            + " ## empty ground cannot invent vegetation;"
+                            + " every plant placement must propagate from a"
+                            + " nearby live plant");
+            return false;
+        }
         if (plant == Material.TALL_GRASS || plant == Material.LARGE_FERN) {
             return placeTallPlant(target, plant);
         }
@@ -487,84 +502,66 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
                         + " ## living vegetation may reclaim settled leaf piles");
     }
 
-    private Material choosePlant(Biome biome, Block target, MeadowGrowthConfig currentConfig) {
-        Material clustered = nearbyFlower(target);
-        if (clustered != null && countNearbyFlowers(target, 5) < 4 && random.nextInt(100) < 42) {
-            return clustered;
-        }
-
-        if (isWetPocket(target)) {
-            return biomeKey(biome).contains("SWAMP") ? Material.BLUE_ORCHID : (random.nextBoolean() ? Material.FERN : Material.SHORT_GRASS);
-        }
-        if (isSlopedPocket(target.getRelative(BlockFace.DOWN))) {
-            return random.nextInt(100) < 68 ? Material.SHORT_GRASS : Material.FERN;
-        }
-        if (target.getLightFromSky() < 7) {
-            return random.nextInt(100) < 58 ? Material.FERN : Material.SHORT_GRASS;
-        }
-
-        Material rareFeature = rareSurfaceFeature(biome, target);
-        if (rareFeature != null) {
-            return rareFeature;
-        }
-
-        int flowerChance = currentConfig.maxPlantsPerArea() > 0 && countNearbyPlants(target, 5) > currentConfig.maxPlantsPerArea() / 2
-                ? Math.max(4, currentConfig.flowerChancePercent() / 2)
-                : currentConfig.flowerChancePercent();
-        if (countNearbyFlowers(target, 6) < 4 && random.nextInt(100) < flowerChance) {
-            return flowerForBiome(biome, target.getX(), target.getZ());
-        }
-
-        String biomeKey = biomeKey(biome);
-        if (biomeKey.contains("TAIGA") || biomeKey.contains("OLD_GROWTH") || biomeKey.contains("FOREST")) {
-            return random.nextInt(100) < 30 ? Material.FERN : Material.SHORT_GRASS;
-        }
-        return random.nextInt(100) < 12 ? Material.FERN : Material.SHORT_GRASS;
-    }
-
-    private Material rareSurfaceFeature(Biome biome, Block target) {
-        if (random.nextInt(100) >= 3 || countNearbyRareFeatures(target, 12) >= 2) {
-            return null;
-        }
-        String key = biomeKey(biome);
-        if (hasAdjacentWater(target.getRelative(BlockFace.DOWN)) && random.nextBoolean()) {
-            return Material.SUGAR_CANE;
-        }
-        if (key.contains("JUNGLE")) {
-            return target.getLightFromSky() >= 9 ? Material.MELON : null;
-        }
-        if (key.contains("TAIGA") || key.contains("OLD_GROWTH")) {
-            return Material.SWEET_BERRY_BUSH;
-        }
-        if (key.contains("SAVANNA") || key.contains("DESERT") || key.contains("BADLANDS")) {
-            return Material.DEAD_BUSH;
-        }
-        if (key.contains("FOREST") || key.contains("PLAINS") || key.contains("MEADOW")) {
-            return target.getLightFromSky() >= 9 ? Material.PUMPKIN : null;
-        }
-        return null;
-    }
-
-    private boolean isWetPocket(Block target) {
-        for (BlockFace face : List.of(BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST, BlockFace.DOWN)) {
-            if (target.getRelative(face).isLiquid()) {
-                return true;
+    private Material chooseSpreadPlant(
+            Block target,
+            MeadowGrowthConfig currentConfig
+    ) {
+        List<Material> commonSources = new ArrayList<>();
+        List<Material> flowerSources = new ArrayList<>();
+        List<Material> rareSources = new ArrayList<>();
+        int radius = 3;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                if ((dx * dx) + (dz * dz) > radius * radius) {
+                    continue;
+                }
+                for (int dy = -1; dy <= 1; dy++) {
+                    if (dx == 0 && dy == 0 && dz == 0) {
+                        continue;
+                    }
+                    Material source = target.getRelative(dx, dy, dz).getType();
+                    if (isSpreadSourcePlant(source)
+                            && canPropagatePlantTo(source, target)) {
+                        Material normalized = normalizeSpreadSource(source);
+                        if (isFlower(normalized)) {
+                            flowerSources.add(normalized);
+                        } else if (RARE_SPREAD_PLANTS.contains(normalized)) {
+                            rareSources.add(normalized);
+                        } else {
+                            commonSources.add(normalized);
+                        }
+                    }
+                }
             }
         }
-        return false;
+        if (!rareSources.isEmpty() && random.nextInt(100) < 3) {
+            return rareSources.get(random.nextInt(rareSources.size()));
+        }
+        if (!flowerSources.isEmpty()
+                && random.nextInt(100)
+                        < currentConfig.flowerChancePercent()) {
+            return flowerSources.get(random.nextInt(flowerSources.size()));
+        }
+        return commonSources.isEmpty()
+                ? null
+                : commonSources.get(random.nextInt(commonSources.size()));
     }
 
-    private boolean isSlopedPocket(Block ground) {
-        int uneven = 0;
-        for (BlockFace face : List.of(BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST)) {
-            Block neighbor = ground.getRelative(face);
-            if (!MEADOW_GROUND.contains(neighbor.getType()) && !SPREADABLE_GROUND.contains(neighbor.getType())
-                    && !MEADOW_GROUND.contains(neighbor.getRelative(BlockFace.DOWN).getType())
-                    && !SPREADABLE_GROUND.contains(neighbor.getRelative(BlockFace.DOWN).getType())) {
-                uneven++;
-            }
+    private Material normalizeSpreadSource(Material source) {
+        // ## A two-block plant propagates from its species, but starts from a
+        // stable lower form unless the normal height-growth lane upgrades it.
+        return switch (source) {
+            case TALL_GRASS -> Material.SHORT_GRASS;
+            case LARGE_FERN -> Material.FERN;
+            default -> source;
+        };
+    }
+
+    private boolean canPropagatePlantTo(Material source, Block target) {
+        if (source == Material.SUGAR_CANE) {
+            return hasAdjacentWater(target.getRelative(BlockFace.DOWN));
         }
-        return uneven >= 2;
+        return true;
     }
 
     private boolean hasAdjacentWater(Block ground) {
@@ -574,67 +571,6 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
             }
         }
         return false;
-    }
-
-    private Material flowerForBiome(Biome biome, int x, int z) {
-        String name = biomeKey(biome);
-        if (name.contains("SWAMP")) {
-            return Material.BLUE_ORCHID;
-        }
-        if (name.contains("CHERRY")) {
-            return Material.PINK_PETALS;
-        }
-        if (name.contains("MEADOW")) {
-            return pickStable(x, z, List.of(
-                    Material.DANDELION,
-                    Material.POPPY,
-                    Material.ALLIUM,
-                    Material.AZURE_BLUET,
-                    Material.OXEYE_DAISY,
-                    Material.CORNFLOWER
-            ));
-        }
-        if (name.contains("FOREST") || name.contains("BIRCH")) {
-            return pickStable(x, z, List.of(
-                    Material.OXEYE_DAISY,
-                    Material.LILY_OF_THE_VALLEY,
-                    Material.POPPY,
-                    Material.DANDELION
-            ));
-        }
-        return pickStable(x, z, List.of(
-                Material.DANDELION,
-                Material.POPPY,
-                Material.AZURE_BLUET,
-                Material.OXEYE_DAISY,
-                Material.CORNFLOWER
-        ));
-    }
-
-    private String biomeKey(Biome biome) {
-        return biome.getKey().getKey().toUpperCase(Locale.ROOT);
-    }
-
-    private Material pickStable(int x, int z, List<Material> materials) {
-        int cellX = Math.floorDiv(x, 7);
-        int cellZ = Math.floorDiv(z, 7);
-        int index = Math.floorMod((cellX * 73428767) ^ (cellZ * 912931), materials.size());
-        return materials.get(index);
-    }
-
-    private Material nearbyFlower(Block target) {
-        for (int dx = -3; dx <= 3; dx++) {
-            for (int dz = -3; dz <= 3; dz++) {
-                if ((dx * dx) + (dz * dz) > 9) {
-                    continue;
-                }
-                Material type = target.getRelative(dx, 0, dz).getType();
-                if (isFlower(type)) {
-                    return type;
-                }
-            }
-        }
-        return null;
     }
 
     private boolean hasNearbyMeadowSource(Block ground) {
@@ -661,7 +597,7 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
                 for (int dy = -1; dy <= 1; dy++) {
-                    if (MEADOW_PLANTS.contains(center.getRelative(dx, dy, dz).getType())) {
+                    if (isSpreadSourcePlant(center.getRelative(dx, dy, dz).getType())) {
                         count++;
                     }
                 }
@@ -670,37 +606,9 @@ public final class MeadowGrowthFeature implements PluginFeature, Listener {
         return count;
     }
 
-    private int countNearbyFlowers(Block center, int radius) {
-        int count = 0;
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    if (isFlower(center.getRelative(dx, dy, dz).getType())) {
-                        count++;
-                    }
-                }
-            }
-        }
-        return count;
-    }
-
-    private int countNearbyRareFeatures(Block center, int radius) {
-        int count = 0;
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    Material type = center.getRelative(dx, dy, dz).getType();
-                    if (type == Material.PUMPKIN
-                            || type == Material.MELON
-                            || type == Material.SWEET_BERRY_BUSH
-                            || type == Material.SUGAR_CANE
-                            || type == Material.DEAD_BUSH) {
-                        count++;
-                    }
-                }
-            }
-        }
-        return count;
+    private boolean isSpreadSourcePlant(Material material) {
+        return MEADOW_PLANTS.contains(material)
+                || RARE_SPREAD_PLANTS.contains(material);
     }
 
     private boolean isSurfaceCandidate(Block block) {

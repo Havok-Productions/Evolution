@@ -123,6 +123,17 @@ public final class PlantRegrowthFeature implements PluginFeature, Listener {
                 sample.detail("world-disabled " + block.getType());
                 return;
             }
+            if (plugin.playerPlacedTreeBlocks().contains(block)) {
+                // ## Shared provenance outranks shape heuristics. A player log
+                // can resemble a two-block sapling trunk but must never queue
+                // vanilla tree reconstruction.
+                plugin.pathDebug().trace(
+                        plugin, "regrowth", "break.skip-player-wood",
+                        block.getType() + " at "
+                                + format(block.getLocation()));
+                sample.detail("player-placed-tree-wood " + block.getType());
+                return;
+            }
 
         String brokenBlockKey = PendingRegrowth.keyFor(block);
         String activeKey = activeBlockKeys.get(brokenBlockKey);

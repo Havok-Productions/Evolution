@@ -8,14 +8,41 @@ import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 
 final class TreeDna {
-    // ## Revision 6 recaptures revision-5 live crowns once so completed trees
-    // can retire residual source foliage under the ownership-aware constructor.
-    static final int CURRENT_SHAPE_REVISION = 6;
+    // ## Revision 10 preserves the measured source architecture as a
+    // species-specific variant throughout every evolution stage.
+    // ## Revision 13 gives spruce one contiguous tapered conifer envelope.
+    // Revision-12 spruce receipts otherwise preserve stacked canopy blobs
+    // that satisfy connectivity while remaining visibly deformed.
+    // ## Revision 14 gives acacia crowns a layered, dense umbrella envelope
+    // that masks their supporting branch frame without losing the silhouette.
+    // ## Revision 15 lifts spruce fringe cells out of the stump/terrain band.
+    // Revision-13 spruce targets could be impossible on ordinary grass and
+    // repeatedly leave a half-built crown around an otherwise finished trunk.
+    // ## Revision 16 widens medium fancy-oak crown lobes. This is variant
+    // scoped so ordinary completed oaks do not re-enter cleanup.
+    static final int CURRENT_SHAPE_REVISION = 16;
+
+    static int requiredShapeRevision(TreeSpecies species) {
+        // ## Species-scoped revisions keep a planner correction from forcing
+        // unrelated, already-complete trees through cleanup again.
+        return switch (species) {
+            case SPRUCE -> 15;
+            case ACACIA -> 14;
+            default -> 13;
+        };
+    }
+
+    static int requiredShapeRevision(TreeDna dna) {
+        return dna.variant() == TreeVariant.OAK_FANCY
+                ? 16 : requiredShapeRevision(dna.species());
+    }
     private final UUID worldId;
     private final int baseX;
     private final int baseY;
     private final int baseZ;
     private final TreeSpecies species;
+    private final TreeVariant variant;
+    private final TreeSourcePattern sourcePattern;
     private final long seed;
     private final TreePersonality personality;
     private final TreeRarity rarity;
@@ -67,6 +94,8 @@ final class TreeDna {
             int baseY,
             int baseZ,
             TreeSpecies species,
+            TreeVariant variant,
+            TreeSourcePattern sourcePattern,
             long seed,
             TreePersonality personality,
             TreeRarity rarity,
@@ -115,35 +144,64 @@ final class TreeDna {
         this.baseY = baseY;
         this.baseZ = baseZ;
         this.species = species;
+        this.variant = variant == null
+                || variant.species() != species
+                        ? TreeVariant.defaultFor(species) : variant;
+        this.sourcePattern = sourcePattern == null
+                ? TreeSourcePattern.unknown() : sourcePattern;
         this.seed = seed;
         this.personality = personality == null ? TreePersonality.BALANCED : personality;
         this.rarity = rarity == null ? TreeRarity.COMMON : rarity;
-        this.targetHeight = Math.max(Math.max(4, targetHeight), TreeShapeProfile.targetHeightFloor(this.species, this.personality, this.rarity));
-        this.branchCount = TreeDnaShapeRules.normalizeBranchCount(this.species, this.personality, this.targetHeight, branchCount);
-        int branchLengthFloor = TreeShapeProfile.branchLengthFloor(this.species, this.personality, this.targetHeight);
+        int targetFloor = TreeVariantPolicy.targetHeightFloor(
+                this.species, this.variant,
+                this.personality, this.rarity);
+        int targetCap = TreeVariantPolicy.targetHeightCap(
+                this.species, this.variant,
+                this.personality, this.rarity,
+                this.sourcePattern);
+        this.targetHeight = Math.min(
+                targetCap,
+                Math.max(Math.max(4, targetHeight), targetFloor));
+        this.branchCount = Math.max(
+                TreeVariantPolicy.branchCountFloor(this),
+                TreeDnaShapeRules.normalizeBranchCount(
+                        this.species, this.variant, this.personality,
+                        this.targetHeight, branchCount));
+        int branchLengthFloor = Math.max(
+                TreeVariantPolicy.branchLengthFloor(this),
+                TreeShapeProfile.branchLengthFloor(
+                        this.species, this.personality, this.targetHeight));
         this.minBranchLength = Math.max(1, Math.min(Math.max(minBranchLength, 1), Math.max(maxBranchLength, branchLengthFloor)));
         this.maxBranchLength = Math.max(this.minBranchLength, Math.max(maxBranchLength, branchLengthFloor));
         this.branchBias = branchBias;
         this.canopyRadius = canopyRadius;
         int horizontalFloor = Math.max(
                 TreeDnaShapeRules.minimumHorizontalCanopyRadius(this.species, this.personality, this.targetHeight),
-                TreeShapeProfile.canopyRadiusFloor(this.species, this.personality, this.rarity, this.targetHeight, true)
+                TreeVariantPolicy.canopyRadiusFloor(this, true)
         );
         int normalizedRadiusX = Math.max(Math.max(1, canopyRadiusX), horizontalFloor);
         int normalizedRadiusZ = Math.max(Math.max(1, canopyRadiusZ),
                 Math.max(TreeDnaShapeRules.minimumHorizontalCanopyRadius(this.species, this.personality, this.targetHeight),
-                        TreeShapeProfile.canopyRadiusFloor(this.species, this.personality, this.rarity, this.targetHeight, false)));
+                        TreeVariantPolicy.canopyRadiusFloor(this, false)));
         this.canopyRadiusX = normalizedRadiusX;
         this.canopyRadiusZ = normalizedRadiusZ;
-        this.canopyRadiusY = TreeDnaShapeRules.normalizeCanopyVerticalRadius(this.species, this.personality, this.targetHeight, canopyRadiusY, normalizedRadiusX, normalizedRadiusZ);
+        this.canopyRadiusY =
+                TreeDnaShapeRules.normalizeCanopyVerticalRadius(
+                        this.species, this.variant, this.personality,
+                        this.targetHeight, canopyRadiusY,
+                        normalizedRadiusX, normalizedRadiusZ);
         this.canopyDensity = canopyDensity;
         this.branchStartRatio = TreeDnaShapeRules.normalizeBranchStart(this.species, this.personality, this.targetHeight, branchStartRatio);
         this.branchRiseChance = TreeDnaShapeRules.clamp(branchRiseChance, 0.0D, 0.85D);
         this.rootChance = rootChance;
         this.vineChance = vineChance;
         this.groundDetailChance = groundDetailChance;
-        this.trunkRadius = Math.max(TreeShapeProfile.trunkWidthFloor(this.species, this.personality, this.rarity, this.targetHeight), Math.max(1, Math.min(8, trunkRadius)));
-        this.canopyLayerCount = Math.max(TreeShapeProfile.canopyLayerFloor(this.species, this.personality, this.rarity, this.targetHeight), Math.max(0, Math.min(7, canopyLayerCount)));
+        this.trunkRadius = Math.max(
+                TreeVariantPolicy.trunkWidthFloor(this),
+                Math.max(1, Math.min(8, trunkRadius)));
+        this.canopyLayerCount = Math.max(
+                TreeVariantPolicy.canopyLayerFloor(this),
+                Math.max(0, Math.min(7, canopyLayerCount)));
         this.canopyLayerSpread = Math.max(Math.max(this.canopyRadiusX, this.canopyRadiusZ), Math.max(0, Math.min(12, canopyLayerSpread)));
         this.leanX = Math.max(-1, Math.min(1, leanX));
         this.leanZ = Math.max(-1, Math.min(1, leanZ));
@@ -170,9 +228,11 @@ final class TreeDna {
 
     static TreeDna create(World world, TreeCandidate candidate,
             TreeGrowthProfile profile, TreeProfileSample sample,
+            TreeVariant variant, TreeSourcePattern sourcePattern,
             String parentKey, int generation) {
         return TreeDnaFactory.create(
-                world, candidate, profile, sample, parentKey, generation);
+                world, candidate, profile, sample,
+                variant, sourcePattern, parentKey, generation);
     }
 
     static TreeDna from(ConfigurationSection section) {
@@ -205,6 +265,14 @@ final class TreeDna {
 
     TreeSpecies species() {
         return species;
+    }
+
+    TreeVariant variant() {
+        return variant;
+    }
+
+    TreeSourcePattern sourcePattern() {
+        return sourcePattern;
     }
 
     long seed() {
@@ -598,6 +666,22 @@ final class TreeDna {
         return true;
     }
 
+    synchronized boolean reconcileEvolvedRole(
+            String blockKey,
+            TreeOwnershipRoleReconciliationPolicy.Role liveRole) {
+        TreeTransitionLedger updated =
+                transitionLedger.reconcileEvolvedRole(
+                        blockKey,
+                        liveRole
+                                == TreeOwnershipRoleReconciliationPolicy.Role
+                                        .WOOD);
+        if (updated == transitionLedger) {
+            return false;
+        }
+        transitionLedger = updated;
+        return true;
+    }
+
     synchronized boolean forgetEvolvedLog(String blockKey) {
         TreeTransitionLedger updated =
                 transitionLedger.retireEvolvedLog(blockKey);
@@ -607,6 +691,17 @@ final class TreeDna {
         transitionLedger = updated;
         return true;
     }
+
+    synchronized boolean forgetEvolvedLeaf(String blockKey) {
+        TreeTransitionLedger updated =
+                transitionLedger.retireEvolvedLeaf(blockKey);
+        if (updated == transitionLedger) {
+            return false;
+        }
+        transitionLedger = updated;
+        return true;
+    }
+
     synchronized boolean markEvolvedLeaf(String blockKey) {
         TreeTransitionLedger updated =
                 transitionLedger.recordEvolvedLeaf(blockKey);
@@ -707,6 +802,11 @@ final class TreeDna {
         return damageCount;
     }
 
+    void clearDamage() {
+        damageCount = 0;
+        stalledUntilMillis = 0L;
+    }
+
     void markDamaged(long stallMillis) {
         damageCount = Math.min(20, damageCount + 1);
         stalledUntilMillis = Math.max(stalledUntilMillis, System.currentTimeMillis() + stallMillis);
@@ -749,11 +849,17 @@ final class TreeDna {
         if (direction == 0) {
             return 0;
         }
-        int start = baseY + Math.max(2, (int) Math.round(targetHeight * leanStartRatio));
+        // ## Lean belongs to the shape currently being built. Using the
+        // eventual target height kept small/medium acacias perfectly vertical
+        // because their visible trunk ended before the future lean threshold.
+        int visibleHeight = TreeSpeciesStageStyle.visibleHeight(this);
+        int start = baseY + Math.max(2,
+                (int) Math.round(visibleHeight * leanStartRatio));
         if (y < start) {
             return 0;
         }
-        int leanSpan = Math.max(3, targetHeight - (start - baseY));
+        int leanSpan = Math.max(
+                3, visibleHeight - (start - baseY));
         int offset = Math.min(2, Math.max(1, (y - start) / Math.max(2, leanSpan / 2)));
         return direction * offset;
     }

@@ -38,13 +38,13 @@ final class TreeMaturityService {
         this.planAudit = planAudit;
         this.configSupplier = configSupplier;
     }
-    void reconcileStageWithSourceHeight(
+    boolean reconcileStageWithSourceHeight(
             TreeCandidate candidate,
             TreeDna dna,
             TreeEvolutionConfig currentConfig
     ) {
         if (!dna.hasOriginalShapeSnapshot()) {
-            return;
+            return false;
         }
         int observedHeight = Math.max(
                 candidate.height(),
@@ -66,7 +66,7 @@ final class TreeMaturityService {
                             + " ## an existing trunk cannot be forced backward into a shorter stage");
         }
         if (advanced <= 0) {
-            return;
+            return false;
         }
                 planAudit.invalidateLiveAnalysis(dna.key());
         repository.markDirty("source-height stage reconcile " + dna.key());
@@ -80,6 +80,7 @@ final class TreeMaturityService {
                         + " planned-height="
                         + TreeSpeciesStageStyle.visibleHeight(dna)
                         + " ## source-size reconciliation runs before constructor routing");
+        return true;
     }
 
     void updateMaturity(TreeCandidate candidate, TreeDna dna, TreeEvolutionConfig currentConfig) {
@@ -246,7 +247,9 @@ final class TreeMaturityService {
                             == dna.species().logMaterial())
                     .ifPresent(block -> logs.add(blockKey));
         }
-        return logs;
+        // ## Leaves may bridge two touching crowns. Source wood belongs to this
+        // tree only when its 3D wood path reaches the active stump.
+        return TreeWoodOwnershipGraph.connectedToRoot(dna, logs);
     }
 
     Set<String> originalLeafKeys(TreeCandidate candidate, TreeDna dna) {

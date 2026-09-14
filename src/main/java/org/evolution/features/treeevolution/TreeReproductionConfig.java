@@ -22,7 +22,10 @@ record TreeReproductionConfig(
 ) {
     static TreeReproductionConfig load(FileConfiguration config) {
         boolean testing = RuntimeProfile.testingEnabled(config)
-                && config.getBoolean("tree-evolution.testing.enabled", true);
+                && config.getBoolean("tree-evolution.testing.enabled", true)
+                && config.getBoolean(
+                        "tree-evolution.reproduction.accelerate-in-testing",
+                        false);
         double chanceMultiplier = testing
                 ? positive(config.getDouble(
                         "tree-evolution.reproduction.testing-chance-multiplier",

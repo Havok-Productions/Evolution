@@ -1,8 +1,13 @@
 package org.evolution.features.treeevolution.constructor;
 
+import java.util.EnumSet;
+import java.util.Set;
+
 public final class TreeConstructionHierarchySmokeTest {
     private static final TreeConstructionHierarchy HIERARCHY =
             new TreeConstructionHierarchy();
+    private static final Set<TreeConstructionSmokeTag> OBSERVED =
+            EnumSet.noneOf(TreeConstructionSmokeTag.class);
 
     private TreeConstructionHierarchySmokeTest() {
     }
@@ -21,12 +26,29 @@ public final class TreeConstructionHierarchySmokeTest {
                         1.0D, 1.0D, 1.0D, false),
                 TreeConstructionPhase.WAIT_FOR_SOURCE_SNAPSHOT,
                 TreeConstructionSubrule.IMMUTABLE_SOURCE_SNAPSHOT, false);
+        assertDecision("ownership role reconciliation precedes pruning",
+                stateWithOwnershipRoleMismatch(),
+                TreeConstructionPhase.REPAIR,
+                TreeConstructionSubrule
+                        .OWNERSHIP_ROLE_RECONCILIATION,
+                false);
         assertDecision("repair precedes normal structure",
                 state(true, true, false, true, false,
                         false, false, 0, 0,
                         0.0D, 0.0D, 0.0D, false),
                 TreeConstructionPhase.REPAIR,
                 TreeConstructionSubrule.INTERRUPTED_DAMAGE_REPAIR, false);
+        assertDecision("detached evolved wood precedes shape work",
+                stateWithDisconnected(),
+                TreeConstructionPhase.PRUNE_RETIRED_CROWN,
+                TreeConstructionSubrule
+                        .DISCONNECTED_EVOLVED_STRUCTURE,
+                false);
+        assertDecision("planned detached wood repairs its parent path",
+                stateWithDisconnectedTarget(),
+                TreeConstructionPhase.REPAIR,
+                TreeConstructionSubrule.DISCONNECTED_TARGET_REPAIR,
+                false);
         assertDecision("ready source blocker is replaced atomically",
                 state(true, true, true, false, true,
                         false, false, 0, 0,
@@ -45,6 +67,17 @@ public final class TreeConstructionHierarchySmokeTest {
                         1.0D, 0.0D, 0.0D, false),
                 TreeConstructionPhase.BUILD_CANOPY_SHELL,
                 TreeConstructionSubrule.COVER_EXPOSED_SUPPORT, false);
+        assertDecision("unplanned terminal retirement is independently traceable",
+                stateWithCanopyIntegrityIssue(1, 0, 0),
+                TreeConstructionPhase.BUILD_CANOPY_SHELL,
+                TreeConstructionSubrule
+                        .UNPLANNED_BARE_TERMINAL_RETIREMENT,
+                false);
+        assertDecision("stale envelope retirement is independently traceable",
+                stateWithCanopyIntegrityIssue(0, 1, 0),
+                TreeConstructionPhase.BUILD_CANOPY_SHELL,
+                TreeConstructionSubrule.STALE_ENVELOPE_LEAF_RETIREMENT,
+                false);
         assertDecision("owned branch envelope is independently traceable",
                 state(true, true, false, false, false,
                         false, false, 0, 1,
@@ -63,13 +96,28 @@ public final class TreeConstructionHierarchySmokeTest {
                         1.0D, 0.40D, 0.30D, false),
                 TreeConstructionPhase.BUILD_BRANCH_FRAME,
                 TreeConstructionSubrule.PARENT_LINKED_BRANCH_FRAME, false);
+        assertDecision("target role conflict precedes canopy fill",
+                stateWithConflict(),
+                TreeConstructionPhase.PRUNE_RETIRED_CROWN,
+                TreeConstructionSubrule.CONFLICTING_EVOLVED_TARGET,
+                false);
+        assertDecision("obsolete evolved structure precedes completion",
+                stateWithObsolete(),
+                TreeConstructionPhase.PRUNE_RETIRED_CROWN,
+                TreeConstructionSubrule.OBSOLETE_EVOLVED_STRUCTURE, false);
         assertDecision("canopy fill follows branch frame",
                 state(true, true, false, false, false,
                         false, false, 0, 0,
                         1.0D, 1.0D, 0.50D, false),
                 TreeConstructionPhase.FILL_CANOPY,
                 TreeConstructionSubrule.CANOPY_STAGE_TARGET, false);
-        assertDecision("retired crown prunes only after targets",
+        assertDecision("ready cleanup interleaves with remaining canopy fill",
+                state(true, true, true, false, false,
+                        true, true, 0, 0,
+                        1.0D, 1.0D, 0.75D, false),
+                TreeConstructionPhase.PRUNE_RETIRED_CROWN,
+                TreeConstructionSubrule.RETIRED_SOURCE_CROWN, false);
+        assertDecision("retired crown continues after targets",
                 state(true, true, true, false, false,
                         true, true, 0, 0,
                         1.0D, 1.0D, 1.0D, false),
@@ -94,9 +142,16 @@ public final class TreeConstructionHierarchySmokeTest {
                 TreeConstructionPhase.COMPLETE,
                 TreeConstructionSubrule.STAGE_CONTRACT_COMPLETE, true);
 
+        if (!OBSERVED.equals(EnumSet.allOf(
+                TreeConstructionSmokeTag.class))) {
+            throw new IllegalStateException(
+                    "not every production smoke tag has a hierarchy case: "
+                            + OBSERVED);
+        }
+
         System.out.println(
                 "Tree constructor hierarchy smoke test passed: "
-                        + "phase/subrule ownership and final audit agree.");
+                        + "phase/subrule/smoke-tag ownership and final audit agree.");
     }
 
     private static TreeConstructionState state(
@@ -115,10 +170,81 @@ public final class TreeConstructionHierarchySmokeTest {
             boolean details
     ) {
         return new TreeConstructionState(
-                ownership, snapshot, transition, repair, blocker,
-                cleanupReady, retired, exposedLogs, uncoveredTips,
+                ownership, snapshot, transition, false, repair, blocker,
+                false, false, false, cleanupReady, false, retired,
+                !transition || !retired,
+                exposedLogs, uncoveredTips,
+                0, 0, uncoveredTips,
                 trunk, branch, canopy,
                 0.98D, 1.0D, 0.24D, 0.82D, details);
+    }
+
+    private static TreeConstructionState stateWithObsolete() {
+        return new TreeConstructionState(
+                true, true, false, false, false, false,
+                false, false, false, true, true, false, true,
+                0, 0,
+                0, 0, 0,
+                1.0D, 1.0D, 0.82D,
+                0.98D, 1.0D, 0.24D, 0.82D, false);
+    }
+
+    private static TreeConstructionState stateWithCanopyIntegrityIssue(
+            int unplannedTerminals,
+            int staleEnvelopeLeaves,
+            int plannedEnvelopeIssues
+    ) {
+        int total = unplannedTerminals + staleEnvelopeLeaves
+                + plannedEnvelopeIssues;
+        return new TreeConstructionState(
+                true, true, false, false, false, false,
+                false, false, false, false, false, false, true,
+                0, total, unplannedTerminals, staleEnvelopeLeaves,
+                plannedEnvelopeIssues,
+                1.0D, 1.0D, 0.30D,
+                0.98D, 1.0D, 0.24D, 0.82D, false);
+    }
+
+    private static TreeConstructionState stateWithDisconnected() {
+        return new TreeConstructionState(
+                true, true, false, false, true, false,
+                true, false, false, false, false, false, true,
+                0, 0,
+                0, 0, 0,
+                0.50D, 0.0D, 0.0D,
+                0.98D, 1.0D, 0.24D, 0.82D, false);
+    }
+
+    private static TreeConstructionState
+            stateWithDisconnectedTarget() {
+        return new TreeConstructionState(
+                true, true, false, false, true, false,
+                false, true, false, false, false, false, true,
+                0, 0,
+                0, 0, 0,
+                0.50D, 0.0D, 0.0D,
+                0.98D, 1.0D, 0.24D, 0.82D, false);
+    }
+
+    private static TreeConstructionState stateWithConflict() {
+        return new TreeConstructionState(
+                true, true, false, false, false, false,
+                false, false, true, false, true, false, true,
+                0, 0,
+                0, 0, 0,
+                1.0D, 1.0D, 0.50D,
+                0.98D, 1.0D, 0.24D, 0.82D, false);
+    }
+
+    private static TreeConstructionState
+            stateWithOwnershipRoleMismatch() {
+        return new TreeConstructionState(
+                true, true, false, true, false, false,
+                false, false, true, true, true, false, true,
+                0, 0,
+                0, 0, 0,
+                1.0D, 1.0D, 1.0D,
+                0.98D, 1.0D, 0.24D, 0.82D, false);
     }
 
     private static void assertDecision(
@@ -143,6 +269,12 @@ public final class TreeConstructionHierarchySmokeTest {
             throw new IllegalStateException(
                     name + " attached the subrule to the wrong executor");
         }
+        if (actual.smokeTag() != expectedSubrule.smokeTag()
+                || actual.smokeTag().phase() != expectedPhase) {
+            throw new IllegalStateException(
+                    name + " did not map to its production smoke tag");
+        }
+        OBSERVED.add(actual.smokeTag());
         if (!expectedAuditPass
                 && actual.finalAudit().firstFailure() != expectedSubrule) {
             throw new IllegalStateException(name

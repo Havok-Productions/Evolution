@@ -8,9 +8,13 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
@@ -18,9 +22,13 @@ import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.data.type.Leaves;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.evolution.coreparts.EvolutionPlugin;
+import org.evolution.coreparts.DebugFileRotator;
 import org.evolution.features.treeevolution.constructor.TreeConstructionDecision;
+import org.evolution.features.treeevolution.constructor.TreeConstructionSubrule;
+import org.evolution.coreparts.ResourceReporter.ReportSample;
 
 final class TreeEvolutionDiagnostics {
     private final AtomicLong searches = new AtomicLong();
@@ -37,12 +45,40 @@ final class TreeEvolutionDiagnostics {
     private final AtomicLong stageTransitions = new AtomicLong();
     private final AtomicLong dnaNormalized = new AtomicLong();
     private final AtomicLong constructorDecisions = new AtomicLong();
+    private final AtomicLong cleanTreeObservations = new AtomicLong();
+    private final AtomicLong observationPromotions = new AtomicLong();
     private final AtomicBoolean saveRunning = new AtomicBoolean();
+    private final AtomicBoolean saveDirty = new AtomicBoolean();
+    private final AtomicBoolean deformationAnalysisRunning =
+            new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
     private final AtomicLong next3dBuildMillis = new AtomicLong();
+    private final AtomicLong nextSurfaceMapBuildMillis = new AtomicLong();
+    private final AtomicLong nextAutomaticVoxelScanMillis =
+            new AtomicLong();
     private final Object threeDimensionalSnapshotLock = new Object();
     private final Deque<String> recentEvents = new ArrayDeque<>();
     private final Deque<String> recentStageEvents = new ArrayDeque<>();
+    private final Deque<Map<String, Object>> recentConstructorStageFrames =
+            new ArrayDeque<>();
+    private final LinkedHashMap<String, Map<String, Object>>
+            liveVoxelEnvironmentCaptures = new LinkedHashMap<>();
+    private final LinkedHashMap<String, DeformationAnalysisJob>
+            pendingDeformationAnalyses = new LinkedHashMap<>();
+    private final TreeDeformationHistoryStore deformationHistory =
+            new TreeDeformationHistoryStore();
+    private final TreeDeformationAudit deformationAudit =
+            new TreeDeformationAudit();
+    private final TreeTargetConformanceAudit targetConformanceAudit =
+            new TreeTargetConformanceAudit();
+    private final ConcurrentMap<String, Long> nextAnomalyCaptureMillis =
+            new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, CachedSurfaceToken> surfaceTokenCache =
+            new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Map<String, Character>>
+            previousVoxelStatusByTree = new ConcurrentHashMap<>();
+    private final TreeConstructorStageTimeline constructorStageTimeline =
+            new TreeConstructorStageTimeline();
     private final String sessionStartedAt = Instant.now().toString();
     private volatile List<String> lastMapRows = List.of();
     private volatile String lastMapCenter = "none";
@@ -53,6 +89,9 @@ final class TreeEvolutionDiagnostics {
     private volatile String lastPlan3dSummary = "none";
     private volatile Map<String, Object> lastPlan3dBounds = Map.of();
     private volatile Map<String, Integer> lastPlan3dRoleCounts = Map.of();
+    private volatile Map<String, Integer> lastPlan3dAugmentCounts = Map.of();
+    private volatile Map<String, List<String>>
+            lastPlan3dAugmentCoordinateIndex = Map.of();
     private volatile List<Map<String, Object>> lastPlan3dLayers = List.of();
     private volatile String lastLive3dSummary = "none";
     private volatile Map<String, Object> lastLive3dStatusCounts = Map.of();
@@ -61,13 +100,21 @@ final class TreeEvolutionDiagnostics {
     private volatile Map<String, Object> lastVoxelGridAxes = Map.of();
     private volatile List<Map<String, Object>> lastVoxelModelLayers = List.of();
     private volatile List<Map<String, Object>> lastVoxelLiveStatusLayers = List.of();
+    private volatile List<String> lastVoxelStatusDelta = List.of();
     private volatile Map<String, Object> lastReplaySummary = Map.of();
     private volatile Map<String, Object> lastReplayRoleProgress = Map.of();
     private volatile Map<String, Integer> lastReplayProvenanceCounts = Map.of();
+    private volatile Map<String, Integer> lastReplayAugmentCounts = Map.of();
     private volatile List<Map<String, Object>> lastReplaySamples = List.of();
     private volatile String lastLineageSummary = "none";
     private volatile String lastConstructorSummary = "none";
     private volatile String last3dTreeKey = "none";
+    private volatile EvolutionPlugin plugin;
+
+    void initialize(EvolutionPlugin plugin) {
+        this.plugin = plugin;
+        deformationHistory.load(plugin);
+    }
 
     void recordSearch() {
         searches.incrementAndGet();
@@ -86,6 +133,7 @@ final class TreeEvolutionDiagnostics {
         dnaCreated.incrementAndGet();
         event(config, "[STATE][tree-evolution] dna.create species=" + dna.species().id()
                 + " base=" + dna.baseX() + "," + dna.baseY() + "," + dna.baseZ()
+                + " variant=" + dna.variant().id()
                 + " personality=" + dna.personality()
                 + " rarity=" + dna.rarity()
                 + " age=" + dna.age()
@@ -100,6 +148,7 @@ final class TreeEvolutionDiagnostics {
                 + " branch-start=" + round(dna.branchStartRatio())
                 + " sample=" + dna.profileSampleId()
                 + " source=" + dna.profileSampleSource()
+                + " source-pattern=" + sourcePattern(dna)
                 + " parent=" + dna.parentKey());
         lastLineageSummary = "tree=" + dna.key() + ", parent=" + dna.parentKey() + ", generation=" + dna.generation();
     }
@@ -133,6 +182,7 @@ final class TreeEvolutionDiagnostics {
     void recordPlan(TreeEvolutionConfig config, TreeDna dna, TreePlan plan, List<PlannedTreeBlock> orderedBlocks, World world, boolean force3d) {
         planned.incrementAndGet();
         lastPlanSummary = "species=" + dna.species().id()
+                + ", variant=" + dna.variant().id()
                 + ", personality=" + dna.personality()
                 + ", rarity=" + dna.rarity()
                 + ", age=" + dna.age()
@@ -159,7 +209,12 @@ final class TreeEvolutionDiagnostics {
                 + ", branch-start=" + round(dna.branchStartRatio())
                 + ", stage-branch-start=" + round(TreeSpeciesStageStyle.branchStartRatio(dna))
                 + ", sample=" + dna.profileSampleId()
-                + ", planned-blocks=" + plan.size();
+                + ", planned-blocks=" + plan.size()
+                + ", blueprint="
+                + (plan.blueprintValidation().approved()
+                        ? "approved" : "rejected")
+                + ", coordinate-conflicts="
+                + plan.coordinateConflictCount();
         lastPlanPreview = orderedBlocks.stream()
                 .limit(10)
                 .map(block -> block.role() + " " + block.material() + " " + block.x() + "," + block.y() + "," + block.z())
@@ -178,6 +233,7 @@ final class TreeEvolutionDiagnostics {
             lastReplaySummary = replay.summary();
             lastReplayRoleProgress = replay.roleProgress();
             lastReplayProvenanceCounts = replay.provenanceCounts();
+            lastReplayAugmentCounts = replay.augmentCounts();
             lastReplaySamples = replay.samples();
         }
         if (force3d || shouldBuild3d(config)) {
@@ -196,7 +252,8 @@ final class TreeEvolutionDiagnostics {
         }
         long now = System.currentTimeMillis();
         long next = next3dBuildMillis.get();
-        return now >= next && next3dBuildMillis.compareAndSet(next, now + 5000L);
+        return now >= next
+                && next3dBuildMillis.compareAndSet(next, now + 30_000L);
     }
     void recordIntent(TreeEvolutionConfig config, TreeDna dna, TreeGrowthIntent intent, String detail) {
         intentUpdates.incrementAndGet();
@@ -219,7 +276,7 @@ final class TreeEvolutionDiagnostics {
                 + " " + reason);
     }
 
-    void recordConstructorDecision(
+    TreeConstructorStageTimeline.Boundary recordConstructorDecision(
             TreeEvolutionConfig config,
             TreeDna dna,
             TreeConstructionDecision decision,
@@ -228,6 +285,8 @@ final class TreeEvolutionDiagnostics {
             String executorName
     ) {
         constructorDecisions.incrementAndGet();
+        TreeConstructorStageTimeline.Boundary stageBoundary =
+                constructorStageTimeline.enter(dna.key(), decision);
         lastConstructorSummary = decision.marker()
                 + " tree=" + dna.key()
                 + " executor=" + executorName
@@ -245,6 +304,810 @@ final class TreeEvolutionDiagnostics {
                 + " reason=" + decision.reason();
         event(config, "[TRACE][tree-evolution] " + lastConstructorSummary
                 + " ## one hierarchy attachment owns this tree action");
+        for (TreeConstructorStageTimeline.Frame frame
+                : stageBoundary.frames()) {
+            TreeConstructorStageTimeline.StageIdentity stage =
+                    frame.stage();
+            stageEvent(config,
+                    "[SMOKE][" + frame.boundary() + "]["
+                            + stage.smokeTag().name() + "] tree="
+                            + dna.key() + " transition="
+                            + stage.transition() + " phase="
+                            + stage.phase() + " subrule="
+                            + stage.subrule() + " attachment="
+                            + stage.attachment()
+                            + " ## live boundary matches the replay XYZ-time frame index");
+        }
+        return stageBoundary;
+    }
+
+    void recordConstructorStageFrames(
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            TreeConstructorStageTimeline.Boundary boundary,
+            TreePlan plan,
+            List<PlannedTreeBlock> orderedBlocks,
+            World world
+    ) {
+        if (!config.debug3dEnabled() || world == null
+                || boundary == null || !boundary.changed()) {
+            return;
+        }
+        synchronized (threeDimensionalSnapshotLock) {
+            last3dTreeKey = dna.key();
+            Map<String, Object> snapshot = new LinkedHashMap<>(
+                    stageSnapshot(config, dna, plan));
+            TreeConstructorStageTimeline.Frame latest =
+                    boundary.frames().get(boundary.frames().size() - 1);
+            TreeConstructorStageTimeline.StageIdentity latestStage =
+                    latest.stage();
+            snapshot.put("constructor-smoke-tag",
+                    latestStage.smokeTag().name());
+            snapshot.put("constructor-phase",
+                    latestStage.phase().name());
+            snapshot.put("constructor-subrule",
+                    latestStage.subrule().name());
+            snapshot.put("constructor-attachment",
+                    latestStage.attachment().name());
+            snapshot.put("constructor-boundary",
+                    latest.boundary().name());
+            snapshot.put("constructor-transition",
+                    latestStage.transition());
+            snapshot.put("captured-at", Instant.now().toString());
+            boolean finalBoundary = latestStage.smokeTag()
+                    == org.evolution.features.treeevolution.constructor
+                            .TreeConstructionSmokeTag
+                            .TREE_99_STAGE_COMPLETE;
+            boolean deepCapture = finalBoundary || shouldBuild3d(config);
+            snapshot.put("audit-level",
+                    deepCapture ? "DEEP_VOXEL" : "CONTINUOUS_CONTRACT");
+            snapshot.put("notes",
+                    "## Exact live EXIT/ENTER boundary; compare transition and smoke tag with stage-frame-index.csv.");
+            last3dStageSnapshot = Map.copyOf(snapshot);
+            if (deepCapture) {
+                buildPlan3dMap(config, dna, orderedBlocks, world);
+            }
+            if (finalBoundary && deepCapture) {
+                // ## Completion is the canonical before/current/target
+                // comparison. Never let its anomaly audit reuse a slightly
+                // older blocked-stage capture.
+                liveVoxelEnvironmentCaptures.remove(dna.key());
+            }
+            if (deepCapture) {
+                captureLiveVoxelEnvironment(
+                        config, dna, orderedBlocks, world, true);
+            }
+
+            for (TreeConstructorStageTimeline.Frame stageFrame
+                    : boundary.frames()) {
+                appendConstructorStageFrame(
+                        dna, stageFrame, snapshot.get("captured-at"),
+                        deepCapture);
+            }
+            int maximum = Math.max(1, Math.min(
+                    160, config.debug3dRecentStageEvents()));
+            while (recentConstructorStageFrames.size() > maximum) {
+                recentConstructorStageFrames.removeFirst();
+            }
+            if (deepCapture) {
+                queuePotentialDeformation(
+                        config, dna, plan, orderedBlocks, world,
+                        "constructor-stage-boundary",
+                        finalBoundary,
+                        false);
+            }
+        }
+    }
+
+    void recordConstructorCompletionFrame(
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            TreeConstructionDecision decision,
+            TreePlan plan,
+            List<PlannedTreeBlock> orderedBlocks,
+            World world
+    ) {
+        if (decision.smokeTag()
+                != org.evolution.features.treeevolution.constructor
+                        .TreeConstructionSmokeTag.TREE_99_STAGE_COMPLETE) {
+            return;
+        }
+        TreeConstructorStageTimeline.Boundary boundary =
+                constructorStageTimeline.complete(dna.key(), decision);
+        recordConstructorStageFrames(
+                config, dna, boundary, plan, orderedBlocks, world);
+    }
+
+    boolean recordBlockedConstructorEnvironment(
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            TreePlan plan,
+            List<PlannedTreeBlock> orderedBlocks,
+            World world
+    ) {
+        if (!config.debug3dEnabled() || world == null
+                || plan == null || orderedBlocks.isEmpty()) {
+            return false;
+        }
+        synchronized (threeDimensionalSnapshotLock) {
+            boolean captured = captureLiveVoxelEnvironment(
+                    config, dna, orderedBlocks, world, true);
+            if (captured) {
+                queuePotentialDeformation(
+                        config, dna, plan, orderedBlocks, world,
+                        "blocked-constructor", false, true);
+            }
+            return captured;
+        }
+    }
+
+    private void appendConstructorStageFrame(
+            TreeDna dna,
+            TreeConstructorStageTimeline.Frame frame,
+            Object capturedAt,
+            boolean deepCapture
+    ) {
+        TreeConstructorStageTimeline.StageIdentity stage = frame.stage();
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("tree", dna.key());
+        output.put("transition", stage.transition());
+        output.put("boundary", frame.boundary().name());
+        output.put("smoke-tag", stage.smokeTag().name());
+        output.put("phase", stage.phase().name());
+        output.put("subrule", stage.subrule().name());
+        output.put("attachment", stage.attachment().name());
+        output.put("captured-at", capturedAt);
+        output.put("audit-level",
+                deepCapture ? "DEEP_VOXEL" : "CONTINUOUS_CONTRACT");
+        if (deepCapture) {
+            output.put("live-summary", lastLive3dSummary);
+            output.put("live-status-counts",
+                    new LinkedHashMap<>(lastLive3dStatusCounts));
+            output.put("voxel-status-delta",
+                    new ArrayList<>(lastVoxelStatusDelta));
+        }
+        output.put("notes",
+                "## Production XYZ-time checkpoint. Continuous frames keep contracts; deep frames add only changed voxels.");
+        recentConstructorStageFrames.addLast(Map.copyOf(output));
+    }
+
+    private boolean captureLiveVoxelEnvironment(
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            List<PlannedTreeBlock> orderedBlocks,
+            World world,
+            boolean refreshFailureCapture
+    ) {
+        long now = System.currentTimeMillis();
+        Map<String, Object> existing =
+                liveVoxelEnvironmentCaptures.remove(dna.key());
+        if (existing != null) {
+            // ## Access order keeps actively failing/reported trees in the
+            // export window. A blocked constructor may refresh after a short
+            // cooldown so its atomically paired DNA and voxels describe the
+            // same moment without scanning thousands of blocks every tick.
+            long capturedMillis = existing.get("captured-millis")
+                    instanceof Number number ? number.longValue() : 0L;
+            if (!refreshFailureCapture
+                    || now - capturedMillis < 3_000L) {
+                liveVoxelEnvironmentCaptures.put(dna.key(), existing);
+                return false;
+            }
+        }
+        if (orderedBlocks.isEmpty()) {
+            return false;
+        }
+        int radius = Math.max(4, Math.min(
+                12, config.debugMapRadius()));
+        int minX = dna.baseX() - radius;
+        int maxX = dna.baseX() + radius;
+        int minZ = dna.baseZ() - radius;
+        int maxZ = dna.baseZ() + radius;
+        int plannedMinY = orderedBlocks.stream()
+                .mapToInt(PlannedTreeBlock::y).min()
+                .orElse(dna.baseY());
+        int plannedMaxY = orderedBlocks.stream()
+                .mapToInt(PlannedTreeBlock::y).max()
+                .orElse(dna.baseY());
+        int minY = Math.max(world.getMinHeight(),
+                Math.min(dna.baseY() - 2, plannedMinY - 1));
+        int maxY = Math.min(world.getMaxHeight() - 1,
+                Math.min(minY + 47, plannedMaxY + 2));
+        Map<String, PlannedTreeBlock> planByKey = new HashMap<>();
+        for (PlannedTreeBlock block : orderedBlocks) {
+            planByKey.put(block.key(), block);
+        }
+
+        List<Map<String, Object>> cells = new ArrayList<>();
+        List<Map<String, Object>> unreadable = new ArrayList<>();
+        int minChunkX = minX >> 4;
+        int maxChunkX = maxX >> 4;
+        int minChunkZ = minZ >> 4;
+        int maxChunkZ = maxZ >> 4;
+        EvolutionPlugin currentPlugin = plugin;
+        ReportSample captureSample = currentPlugin == null
+                ? null : currentPlugin.resourceReporter().begin(
+                        "tree-evolution",
+                        "diagnostics.voxel-capture.region");
+        try {
+            for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+                for (int chunkZ = minChunkZ;
+                        chunkZ <= maxChunkZ; chunkZ++) {
+                    int chunkMinX = Math.max(minX, chunkX << 4);
+                    int chunkMaxX = Math.min(maxX, (chunkX << 4) + 15);
+                    int chunkMinZ = Math.max(minZ, chunkZ << 4);
+                    int chunkMaxZ = Math.min(maxZ, (chunkZ << 4) + 15);
+                    boolean loaded = world.isChunkLoaded(chunkX, chunkZ);
+                    boolean owned = loaded && Bukkit.isOwnedByCurrentRegion(
+                            world, chunkX, chunkZ, 0);
+                    if (!loaded || !owned) {
+                        Map<String, Object> area = new LinkedHashMap<>();
+                        area.put("min-x", chunkMinX - dna.baseX());
+                        area.put("min-z", chunkMinZ - dna.baseZ());
+                        area.put("max-x", chunkMaxX - dna.baseX());
+                        area.put("max-z", chunkMaxZ - dna.baseZ());
+                        area.put("gate", loaded
+                                ? "REGION_NOT_OWNED" : "CHUNK_UNLOADED");
+                        unreadable.add(area);
+                        continue;
+                    }
+                    for (int y = minY; y <= maxY; y++) {
+                        for (int z = chunkMinZ; z <= chunkMaxZ; z++) {
+                            for (int x = chunkMinX;
+                                    x <= chunkMaxX; x++) {
+                                appendLiveEnvironmentCell(
+                                        config, dna, world, planByKey,
+                                        cells, x, y, z);
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            if (captureSample != null) {
+                long inspected = (long) (maxX - minX + 1)
+                        * (maxY - minY + 1)
+                        * (maxZ - minZ + 1);
+                captureSample.workUnits(inspected)
+                        .changedUnits(cells.size())
+                        .detail("tree=" + dna.key()
+                                + " sparse-cells=" + cells.size()
+                                + " unreadable-areas=" + unreadable.size())
+                        .close();
+            }
+        }
+
+        Map<String, Object> capture = new LinkedHashMap<>();
+        capture.put("tree", dna.key());
+        capture.put("species", dna.species().id());
+        capture.put("variant", dna.variant().id());
+        capture.put("stage", dna.maturityStage().name());
+        capture.put("captured-at", Instant.now().toString());
+        capture.put("captured-millis", now);
+        capture.put("dna-snapshot-yaml", dnaSnapshotYaml(dna));
+        capture.put("ledger-fingerprint", ledgerFingerprint(dna));
+        capture.put("relative-bounds", (minX - dna.baseX()) + ","
+                + (minY - dna.baseY()) + ","
+                + (minZ - dna.baseZ()) + " -> "
+                + (maxX - dna.baseX()) + ","
+                + (maxY - dna.baseY()) + ","
+                + (maxZ - dna.baseZ()));
+        capture.put("cells", List.copyOf(cells));
+        capture.put("unreadable-areas", List.copyOf(unreadable));
+        capture.put("notes", "## Sparse local world capture. Coordinates "
+                + "are relative to the stump; the fixture exporter removes "
+                + "the live tree key and timestamps.");
+        liveVoxelEnvironmentCaptures.put(
+                dna.key(), Map.copyOf(capture));
+        while (liveVoxelEnvironmentCaptures.size() > 16) {
+            String oldest = liveVoxelEnvironmentCaptures.keySet()
+                    .iterator().next();
+            liveVoxelEnvironmentCaptures.remove(oldest);
+        }
+        return true;
+    }
+
+    private String dnaSnapshotYaml(TreeDna dna) {
+        YamlConfiguration snapshot = new YamlConfiguration();
+        dna.writeTo(snapshot.createSection("dna"));
+        return snapshot.saveToString();
+    }
+
+    private String ledgerFingerprint(TreeDna dna) {
+        return dna.shapeRevision() + ":" + dna.maturityStage()
+                + ":" + dna.currentIntent()
+                + ":" + dna.originalShapeLogs().stream().sorted().toList().hashCode()
+                + ":" + dna.originalShapeLeaves().stream().sorted().toList().hashCode()
+                + ":" + dna.retiredOriginalShapeLeaves().stream().sorted().toList().hashCode()
+                + ":" + dna.evolvedShapeLogs().stream().sorted().toList().hashCode()
+                + ":" + dna.evolvedShapeLeaves().stream().sorted().toList().hashCode();
+    }
+
+    private void appendLiveEnvironmentCell(
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            World world,
+            Map<String, PlannedTreeBlock> planByKey,
+            List<Map<String, Object>> cells,
+            int x,
+            int y,
+            int z
+    ) {
+        String coordinateKey = x + ":" + y + ":" + z;
+        String receiptKey = dna.worldId() + ":" + coordinateKey;
+        Block liveBlock = world.getBlockAt(x, y, z);
+        Material material = liveBlock.getType();
+        boolean persistedReceipt = dna.originalShapeLogs()
+                        .contains(receiptKey)
+                || (dna.originalShapeLeaves().contains(receiptKey)
+                        && !dna.retiredOriginalShapeLeaves()
+                                .contains(receiptKey))
+                || dna.evolvedShapeLogs().contains(receiptKey)
+                || dna.evolvedShapeLeaves().contains(receiptKey);
+        if (material.isAir() && !persistedReceipt) {
+            return;
+        }
+        PlannedTreeBlock planned = planByKey.get(coordinateKey);
+        String category;
+        boolean treeMaterial = isLog(material) || isLeaf(material);
+        TreeBlockRole role = liveRole(material, planned);
+        if (material.isAir()) {
+            category = "AIR_OVERRIDE";
+        } else if (treeMaterial
+                && (dna.evolvedShapeLogs().contains(receiptKey)
+                || dna.evolvedShapeLeaves().contains(receiptKey))) {
+            category = "EVOLVED";
+        } else if (treeMaterial
+                && (dna.originalShapeLogs().contains(receiptKey)
+                || (dna.originalShapeLeaves().contains(receiptKey)
+                        && !dna.retiredOriginalShapeLeaves()
+                                .contains(receiptKey)))) {
+            category = "SOURCE";
+        } else if (treeMaterial && planned != null
+                && material == planned.material()) {
+            // ## Material completion without a DNA receipt is the exact live
+            // state that can strand TREE_11. Replay must preserve it instead
+            // of omitting it as air or misclassifying it as generic neighbor.
+            category = "PLANNED_UNOWNED";
+        } else if (treeMaterial) {
+            category = "NEIGHBOR";
+        } else {
+            // ## Live material wins over a stale tree receipt. This is the
+            // obstruction the production constructor actually encountered.
+            category = "ENVIRONMENT";
+        }
+        boolean replaceable = config.isReplaceable(material);
+        if (planned != null && !material.isAir()) {
+            BlockProvenance provenance = BlockProvenance.classify(
+                    config, dna, planned, material, true, true);
+            replaceable = replaceable
+                    || provenance.isMissingButPlaceable();
+        }
+        Map<String, Object> cell = new LinkedHashMap<>();
+        cell.put("x", x - dna.baseX());
+        cell.put("y", y - dna.baseY());
+        cell.put("z", z - dna.baseZ());
+        cell.put("material", material.name());
+        cell.put("category", category);
+        if (role != null) {
+            cell.put("role", role.name());
+        }
+        boolean likelyForeign = isLikelyForeign(material);
+        cell.put("natural", !likelyForeign);
+        cell.put("replaceable", replaceable);
+        cell.put("player-placed", likelyForeign);
+        if (planned != null) {
+            BlockProvenance provenance = BlockProvenance.classify(
+                    config, dna, planned, material, true, true);
+            cell.put("planned-material", planned.material().name());
+            cell.put("planned-role", planned.role().name());
+            cell.put("planner-augment", planned.augment().name());
+            cell.put("planner-augment-contract",
+                    planned.augment().contract());
+            cell.put("provenance", provenance.name());
+        }
+        if (liveBlock.getBlockData() instanceof Leaves leaves) {
+            cell.put("persistent", leaves.isPersistent());
+        }
+        cells.add(Map.copyOf(cell));
+    }
+
+    void recordPotentialDeformation(
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            TreePlan plan,
+            List<PlannedTreeBlock> orderedBlocks,
+            World world,
+            String trigger,
+            boolean finalState
+    ) {
+        if (!config.debug3dEnabled() || world == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now < nextAnomalyCaptureMillis.getOrDefault(dna.key(), 0L)) {
+            return;
+        }
+        long nextScan = nextAutomaticVoxelScanMillis.get();
+        if (now < nextScan || !nextAutomaticVoxelScanMillis.compareAndSet(
+                nextScan, now + 500L)) {
+            return;
+        }
+        synchronized (threeDimensionalSnapshotLock) {
+            captureLiveVoxelEnvironment(
+                    config, dna, orderedBlocks, world, true);
+            queuePotentialDeformation(
+                    config, dna, plan, orderedBlocks, world,
+                    trigger, finalState, true);
+        }
+    }
+
+    private void queuePotentialDeformation(
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            TreePlan plan,
+            List<PlannedTreeBlock> orderedBlocks,
+            World world,
+            String trigger,
+            boolean finalState,
+            boolean force
+    ) {
+        Map<String, Object> capture =
+                liveVoxelEnvironmentCaptures.get(dna.key());
+        if (capture == null || world == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long eligible = nextAnomalyCaptureMillis.getOrDefault(
+                dna.key(), 0L);
+        if (now < eligible) {
+            return;
+        }
+        DeformationAnalysisJob job = new DeformationAnalysisJob(
+                config, dna.key(), dna.species(), dna.variant(),
+                dna.maturityStage(), dna.currentIntent(),
+                dna.shapeRevision(), trigger, finalState, force,
+                capture, List.copyOf(originalVoxels(dna)),
+                List.copyOf(targetVoxels(dna, orderedBlocks)));
+        synchronized (pendingDeformationAnalyses) {
+            // ## A newer capture supersedes an older pending analysis for the
+            // same tree. This bounds diagnostic pressure during rapid stages.
+            pendingDeformationAnalyses.remove(dna.key());
+            pendingDeformationAnalyses.put(dna.key(), job);
+            while (pendingDeformationAnalyses.size() > 16) {
+                String oldest = pendingDeformationAnalyses.keySet()
+                        .iterator().next();
+                pendingDeformationAnalyses.remove(oldest);
+            }
+        }
+        scheduleDeformationAnalysis();
+    }
+
+    private void scheduleDeformationAnalysis() {
+        EvolutionPlugin currentPlugin = plugin;
+        if (currentPlugin == null || !currentPlugin.isEnabled()
+                || !deformationAnalysisRunning.compareAndSet(false, true)) {
+            return;
+        }
+        Bukkit.getAsyncScheduler().runNow(currentPlugin, task -> {
+            try {
+                DeformationAnalysisJob job;
+                while ((job = pollDeformationAnalysis()) != null) {
+                    analyzePotentialDeformation(currentPlugin, job);
+                }
+            } finally {
+                deformationAnalysisRunning.set(false);
+                synchronized (pendingDeformationAnalyses) {
+                    if (!pendingDeformationAnalyses.isEmpty()) {
+                        scheduleDeformationAnalysis();
+                    }
+                }
+            }
+        });
+    }
+
+    private DeformationAnalysisJob pollDeformationAnalysis() {
+        synchronized (pendingDeformationAnalyses) {
+            if (pendingDeformationAnalyses.isEmpty()) {
+                return null;
+            }
+            String oldest = pendingDeformationAnalyses.keySet()
+                    .iterator().next();
+            return pendingDeformationAnalyses.remove(oldest);
+        }
+    }
+
+    private void analyzePotentialDeformation(
+            EvolutionPlugin plugin,
+            DeformationAnalysisJob job
+    ) {
+        try (ReportSample sample = plugin.resourceReporter().begin(
+                "tree-evolution", "diagnostics.deformation-analysis.async")) {
+            List<TreeVoxelSnapshotRenderer.Voxel> current =
+                    currentVoxels(job.capture());
+            sample.workUnits(current.size());
+            TreeDeformationAudit.Report audit = deformationAudit.inspect(
+                    job.species(), job.variant(), job.maturityStage(),
+                    current, job.finalState());
+            TreeTargetConformanceAudit.Report conformance =
+                    targetConformanceAudit.inspect(
+                            current, job.target(),
+                            blockedTargetCoordinates(job.capture()));
+            sample.workUnits(job.target().size());
+            boolean overallPassed = audit.passed()
+                    && (!job.finalState() || conformance.passed());
+            if (!job.force() && overallPassed) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            long eligible = nextAnomalyCaptureMillis.getOrDefault(
+                    job.treeKey(), 0L);
+            if (now < eligible) {
+                return;
+            }
+            nextAnomalyCaptureMillis.put(
+                    job.treeKey(), now + 10_000L);
+            recordAnalyzedDeformation(
+                    job, current, audit, conformance, overallPassed);
+        }
+    }
+
+    private void recordAnalyzedDeformation(
+            DeformationAnalysisJob job,
+            List<TreeVoxelSnapshotRenderer.Voxel> current,
+            TreeDeformationAudit.Report audit,
+            TreeTargetConformanceAudit.Report conformance,
+            boolean overallPassed
+    ) {
+        Map<String, Object> bundle = new LinkedHashMap<>();
+        bundle.put("captured-at", Instant.now().toString());
+        bundle.put("trigger", job.trigger());
+        bundle.put("tree", job.treeKey());
+        bundle.put("species", job.species().id());
+        bundle.put("variant", job.variant().id());
+        bundle.put("stage", job.maturityStage().name());
+        bundle.put("intent", job.intent().name());
+        bundle.put("shape-revision", job.shapeRevision());
+        bundle.put("final-state", job.finalState());
+        bundle.put("audit-passed", overallPassed);
+        bundle.put("quality-audit-passed", audit.passed());
+        bundle.put("target-conformance-passed", conformance.passed());
+        bundle.put("classification", deformationClassification(
+                job.trigger(), job.finalState(), overallPassed));
+        bundle.put("requires-constructor-change",
+                job.finalState() && !overallPassed);
+        bundle.put("audit-failures", audit.failures());
+        bundle.put("audit-metrics", audit.metrics());
+        bundle.put("target-conformance", conformance.asMap());
+        bundle.put("original-snapshot",
+                TreeVoxelSnapshotRenderer.snapshot(
+                        "original", job.original()));
+        bundle.put("current-snapshot",
+                TreeVoxelSnapshotRenderer.snapshot("current", current));
+        bundle.put("target-snapshot",
+                TreeVoxelSnapshotRenderer.snapshot("target", job.target()));
+        bundle.put("obstructions", obstructionSnapshot(job.capture()));
+        bundle.put("unreadable-areas",
+                job.capture().getOrDefault(
+                        "unreadable-areas", List.of()));
+        bundle.put("hot-coordinate-history",
+                deformationHistory.hotCoordinates(job.treeKey()));
+        bundle.put("notes", "## Automatic anomaly bundle. Original is the "
+                + "captured source tree, current is live plugin-owned/source "
+                + "tree matter, and target is the immutable constructor plan. "
+                + "The quality audit reads shape independently of planner "
+                + "validity; target-conformance separately reports exact "
+                + "missing, extra, wrong-role, and environment-blocked voxels.");
+        deformationHistory.recordAnomalyBundle(bundle);
+        event(job.config(), "[DEBUG][tree-evolution] deformation.capture"
+                + " tree=" + job.treeKey() + " trigger=" + job.trigger()
+                + " final=" + job.finalState() + " audit="
+                + (overallPassed ? "PASS" : audit.failures())
+                + " conformance=" + conformance.asMap()
+                + " history-file="
+                + TreeDeformationHistoryStore.FILE_NAME);
+    }
+
+    private Set<String> blockedTargetCoordinates(
+            Map<String, Object> capture
+    ) {
+        Object rawCells = capture.get("cells");
+        if (!(rawCells instanceof List<?> cells)) {
+            return Set.of();
+        }
+        Set<String> blocked = new HashSet<>();
+        for (Object rawCell : cells) {
+            if (!(rawCell instanceof Map<?, ?> raw)
+                    || !raw.containsKey("planned-material")
+                    || Boolean.TRUE.equals(raw.get("replaceable"))) {
+                continue;
+            }
+            if (String.valueOf(raw.get("material"))
+                    .equals(String.valueOf(raw.get("planned-material")))) {
+                continue;
+            }
+            blocked.add(integer(raw.get("x")) + ":"
+                    + integer(raw.get("y")) + ":"
+                    + integer(raw.get("z")));
+        }
+        return Set.copyOf(blocked);
+    }
+
+    private static String deformationClassification(
+            String trigger, boolean finalState, boolean auditPassed) {
+        // ## A stage boundary is allowed to show unfinished work. Reserve the
+        // actionable label for a completed stage that still fails its
+        // independent voxel audit; this keeps debug evidence honest.
+        if (finalState) {
+            return auditPassed ? "final-healthy" : "final-deformation";
+        }
+        if (auditPassed) {
+            return "blocked-constructor".equals(trigger)
+                    ? "healthy-blocked"
+                    : "healthy-transition";
+        }
+        return "transitional-deformation";
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<TreeVoxelSnapshotRenderer.Voxel> currentVoxels(
+            Map<String, Object> capture
+    ) {
+        Object rawCells = capture.get("cells");
+        if (!(rawCells instanceof List<?> cells)) {
+            return List.of();
+        }
+        List<TreeVoxelSnapshotRenderer.Voxel> voxels = new ArrayList<>();
+        for (Object rawCell : cells) {
+            if (!(rawCell instanceof Map<?, ?> raw)) {
+                continue;
+            }
+            String category = String.valueOf(raw.get("category"));
+            if (!("SOURCE".equals(category) || "EVOLVED".equals(category)
+                    || "PLANNED_UNOWNED".equals(category))) {
+                continue;
+            }
+            TreeBlockRole role = parseRole(raw.get("role"));
+            if (role == null) {
+                continue;
+            }
+            voxels.add(new TreeVoxelSnapshotRenderer.Voxel(
+                    integer(raw.get("x")), integer(raw.get("y")),
+                    integer(raw.get("z")), role,
+                    String.valueOf(raw.get("material"))));
+        }
+        return voxels;
+    }
+
+    private List<TreeVoxelSnapshotRenderer.Voxel> originalVoxels(TreeDna dna) {
+        List<TreeVoxelSnapshotRenderer.Voxel> voxels = new ArrayList<>();
+        for (String key : dna.originalShapeLogs()) {
+            int[] point = relativeReceipt(dna, key);
+            if (point != null) {
+                voxels.add(new TreeVoxelSnapshotRenderer.Voxel(
+                        point[0], point[1], point[2], TreeBlockRole.TRUNK,
+                        dna.species().logMaterial().name()));
+            }
+        }
+        for (String key : dna.originalShapeLeaves()) {
+            int[] point = relativeReceipt(dna, key);
+            if (point != null) {
+                voxels.add(new TreeVoxelSnapshotRenderer.Voxel(
+                        point[0], point[1], point[2], TreeBlockRole.CANOPY,
+                        dna.species().leafMaterial().name()));
+            }
+        }
+        return voxels;
+    }
+
+    private List<TreeVoxelSnapshotRenderer.Voxel> targetVoxels(
+            TreeDna dna, List<PlannedTreeBlock> orderedBlocks
+    ) {
+        return orderedBlocks.stream()
+                .map(block -> new TreeVoxelSnapshotRenderer.Voxel(
+                        block.x() - dna.baseX(),
+                        block.y() - dna.baseY(),
+                        block.z() - dna.baseZ(),
+                        block.role(), block.material().name()))
+                .toList();
+    }
+
+    private List<Map<String, Object>> obstructionSnapshot(
+            Map<String, Object> capture
+    ) {
+        Object rawCells = capture.get("cells");
+        if (!(rawCells instanceof List<?> cells)) {
+            return List.of();
+        }
+        List<Map<String, Object>> obstructions = new ArrayList<>();
+        for (Object rawCell : cells) {
+            if (!(rawCell instanceof Map<?, ?> raw)
+                    || !raw.containsKey("planned-material")) {
+                continue;
+            }
+            boolean replaceable = Boolean.TRUE.equals(raw.get("replaceable"));
+            boolean matches = String.valueOf(raw.get("material"))
+                    .equals(String.valueOf(raw.get("planned-material")));
+            if (matches || replaceable) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            raw.forEach((key, value) -> row.put(String.valueOf(key), value));
+            obstructions.add(Map.copyOf(row));
+            if (obstructions.size() >= 128) {
+                break;
+            }
+        }
+        return obstructions;
+    }
+
+    private int[] relativeReceipt(TreeDna dna, String receipt) {
+        String[] split = receipt.split(":");
+        if (split.length < 4) {
+            return null;
+        }
+        try {
+            int offset = split.length - 3;
+            return new int[]{
+                    Integer.parseInt(split[offset]) - dna.baseX(),
+                    Integer.parseInt(split[offset + 1]) - dna.baseY(),
+                    Integer.parseInt(split[offset + 2]) - dna.baseZ()
+            };
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private TreeBlockRole parseRole(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return TreeBlockRole.valueOf(String.valueOf(value));
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private int integer(Object value) {
+        return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    private TreeBlockRole liveRole(
+            Material material, PlannedTreeBlock planned) {
+        if (isLeaf(material)) {
+            return TreeBlockRole.CANOPY;
+        }
+        if (!isLog(material)) {
+            return null;
+        }
+        if (planned != null
+                && (planned.role() == TreeBlockRole.TRUNK
+                        || planned.role() == TreeBlockRole.BRANCH
+                        || planned.role() == TreeBlockRole.ROOT)) {
+            return planned.role();
+        }
+        // ## Material is the live truth. A log occupying a planned canopy
+        // coordinate remains wood in the capture so TREE_59 sees the same
+        // conflict as production instead of an impossible LEAVES/BRANCH cell.
+        return TreeBlockRole.TRUNK;
+    }
+
+    private boolean isLikelyForeign(Material material) {
+        if (material.isAir() || isLog(material) || isLeaf(material)
+                || material == Material.WATER
+                || material == Material.LAVA) {
+            return false;
+        }
+        String name = material.name();
+        return name.contains("CHEST") || name.contains("SHULKER")
+                || name.contains("FURNACE") || name.contains("DOOR")
+                || name.contains("BED") || name.contains("GLASS")
+                || name.contains("CONCRETE") || name.contains("WOOL")
+                || name.contains("REDSTONE")
+                || name.endsWith("_PLANKS")
+                || name.endsWith("_SLAB")
+                || name.endsWith("_STAIRS");
     }
 
     void recordStageTransition(TreeEvolutionConfig config, TreeDna dna, TreeMaturityStage from, TreeMaturityStage to, String detail) {
@@ -265,13 +1128,137 @@ final class TreeEvolutionDiagnostics {
                 + " " + detail);
     }
 
-    void recordPlaced(EvolutionPlugin plugin, TreeEvolutionConfig config, Block block, PlannedTreeBlock plannedBlock) {
+    void recordTargetOwnershipAnalysis(
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            TreeTargetOwnershipRepairPolicy.Analysis analysis
+    ) {
+        event(config,
+                "[TRACE][tree-evolution][TREE_11] ownership-path "
+                        + "tree=" + dna.key() + " "
+                        + analysis.marker()
+                        + " ## marker uses the same root graph and bridge choice as live construction and smoke replay");
+    }
+
+    boolean recordPlaced(
+            EvolutionPlugin plugin,
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            Block block,
+            Material previousMaterial,
+            PlannedTreeBlock plannedBlock,
+            TreeConstructionDecision decision
+    ) {
+        return recordPlaced(plugin, config, dna, block, previousMaterial,
+                plannedBlock,
+                decision.marker());
+    }
+
+    boolean recordPlaced(
+            EvolutionPlugin plugin,
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            Block block,
+            Material previousMaterial,
+            PlannedTreeBlock plannedBlock,
+            TreeConstructionSubrule subrule
+    ) {
+        return recordPlaced(plugin, config, dna, block, previousMaterial,
+                plannedBlock,
+                "[CONSTRUCTOR][SUBRULE=" + subrule + "]"
+                        + subrule.smokeTag().marker());
+    }
+
+    private boolean recordPlaced(
+            EvolutionPlugin plugin,
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            Block block,
+            Material previousMaterial,
+            PlannedTreeBlock plannedBlock,
+            String constructorMarker
+    ) {
         placed.incrementAndGet();
         event(config, "[ACTION][tree-evolution] place role=" + plannedBlock.role()
                 + " material=" + plannedBlock.material()
-                + " at=" + format(block));
-        buildMap(block, config.debugMapRadius());
+                + " at=" + format(block)
+                + " " + plannedBlock.augment().marker()
+                + " " + constructorMarker
+                + (plannedBlock.hasBranchPath()
+                        ? " branch=" + plannedBlock.branchId() + ":"
+                                + plannedBlock.branchStep()
+                                + " parent=" + plannedBlock.parentX() + ","
+                                + plannedBlock.parentY() + ","
+                                + plannedBlock.parentZ()
+                        : ""));
+        if (!config.debugEnabled()) {
+            return false;
+        }
+        buildMapIfDue(block, config.debugMapRadius());
         saveSoon(plugin, config);
+        return deformationHistory.recordMutation(
+                dna, block, previousMaterial, plannedBlock.material(),
+                plannedBlock.role(), plannedBlock.augment(),
+                constructorMarker, "PLACE", "planned-construction");
+    }
+
+    boolean recordRemoved(
+            EvolutionPlugin plugin,
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            Block block,
+            Material previousMaterial,
+            TreeBlockRole role,
+            TreePlacementAugment augment,
+            TreeConstructionSubrule subrule,
+            String reason
+    ) {
+        pruned.incrementAndGet();
+        String marker = "[CONSTRUCTOR][SUBRULE=" + subrule + "]"
+                + subrule.smokeTag().marker();
+        event(config, "[ACTION][tree-evolution] remove role=" + role
+                + " material=" + previousMaterial
+                + " at=" + format(block)
+                + " " + (augment == null
+                        ? TreePlacementAugment.UNCLASSIFIED.marker()
+                        : augment.marker())
+                + " " + marker + " reason=" + reason);
+        if (!config.debugEnabled()) {
+            return false;
+        }
+        buildMapIfDue(block, config.debugMapRadius());
+        saveSoon(plugin, config);
+        return deformationHistory.recordMutation(
+                dna, block, previousMaterial, Material.AIR, role,
+                augment, marker, "REMOVE", reason);
+    }
+
+    boolean recordCanopyRepairMutation(
+            EvolutionPlugin plugin,
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            Block block,
+            Material previousMaterial,
+            PlannedTreeBlock plannedBlock,
+            TreeConstructionSubrule subrule,
+            String reason
+    ) {
+        String marker = "[CONSTRUCTOR][SUBRULE=" + subrule + "]"
+                + subrule.smokeTag().marker();
+        event(config, "[ACTION][tree-evolution] canopy-repair"
+                + " role=" + plannedBlock.role()
+                + " material=" + plannedBlock.material()
+                + " at=" + format(block)
+                + " " + plannedBlock.augment().marker()
+                + " " + marker + " reason=" + reason);
+        if (!config.debugEnabled()) {
+            return false;
+        }
+        saveSoon(plugin, config);
+        return deformationHistory.recordMutation(
+                dna, block, previousMaterial, plannedBlock.material(),
+                plannedBlock.role(), plannedBlock.augment(), marker,
+                "PLACE", reason);
     }
 
     void recordPrunedBatch(EvolutionPlugin plugin, TreeEvolutionConfig config,
@@ -290,7 +1277,7 @@ final class TreeEvolutionDiagnostics {
                 + " stage=" + dna.maturityStage()
                 + " sample=" + dna.profileSampleId()
                 + " ## target-aware batch cleared old crown leaves without counting them as placements");
-        buildMap(first, config.debugMapRadius());
+        buildMapIfDue(first, config.debugMapRadius());
         saveSoon(plugin, config);
     }
 
@@ -302,7 +1289,7 @@ final class TreeEvolutionDiagnostics {
                 + " leaves-placed=" + leavesPlaced
                 + " target-height=" + dna.targetHeight()
                 + " stage=" + dna.maturityStage());
-        buildMap(trunk, config.debugMapRadius());
+        buildMapIfDue(trunk, config.debugMapRadius());
         saveSoon(plugin, config);
     }
 
@@ -317,7 +1304,7 @@ final class TreeEvolutionDiagnostics {
                 + " at=" + format(block)
                 + " parent=" + parent.key()
                 + " generation=" + parent.generation());
-        buildMap(block, config.debugMapRadius());
+        buildMapIfDue(block, config.debugMapRadius());
         saveSoon(plugin, config);
     }
 
@@ -342,7 +1329,7 @@ final class TreeEvolutionDiagnostics {
                 + " source=" + source
                 + " ## one trunk block entered the gradual constructor; "
                 + "no vanilla whole-tree structure was applied");
-        buildMap(block, config.debugMapRadius());
+        buildMapIfDue(block, config.debugMapRadius());
         saveSoon(plugin, config);
     }
     void recordReject(TreeEvolutionConfig config, String reason, String detail) {
@@ -358,6 +1345,25 @@ final class TreeEvolutionDiagnostics {
     void recordForcedStep(TreeEvolutionConfig config, String detail) {
         forcedSteps.incrementAndGet();
         event(config, "[DEBUG][tree-evolution] force-step " + detail);
+    }
+
+    void recordCleanTreeObservation(
+            TreeEvolutionConfig config,
+            TreeDna dna,
+            TreeWorkStatus status,
+            boolean promoted
+    ) {
+        cleanTreeObservations.incrementAndGet();
+        if (promoted) {
+            observationPromotions.incrementAndGet();
+        }
+        event(config, "[AUDIT][tree-evolution] clean-tree-observation"
+                + " tree=" + dna.key()
+                + " result=" + (promoted ? "PROMOTED_DIRTY" : "CLEAN")
+                + " stage=" + dna.maturityStage()
+                + " " + status.summary()
+                + " ## clean is a scheduling hint, not permanent trust;"
+                + " every nearby tree returns to this bounded observation lane");
     }
 
     long placed() {
@@ -392,21 +1398,26 @@ final class TreeEvolutionDiagnostics {
         if (!config.debugEnabled() || !plugin.isEnabled()) {
             return;
         }
+        saveDirty.set(true);
         long now = System.currentTimeMillis();
         long next = nextSaveMillis.get();
-        if (now < next || !nextSaveMillis.compareAndSet(next, now + 5000L)) {
+        if (now < next
+                || !nextSaveMillis.compareAndSet(next, now + 30_000L)) {
             return;
         }
         saveAsync(plugin, config);
     }
 
     void saveAsync(EvolutionPlugin plugin, TreeEvolutionConfig config) {
+        saveDirty.set(true);
         if (!config.debugEnabled() || !saveRunning.compareAndSet(false, true)) {
             return;
         }
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             try {
-                save(plugin, config);
+                if (saveDirty.getAndSet(false)) {
+                    save(plugin, config);
+                }
             } finally {
                 saveRunning.set(false);
             }
@@ -415,8 +1426,22 @@ final class TreeEvolutionDiagnostics {
 
     void saveNow(EvolutionPlugin plugin, TreeEvolutionConfig config) {
         if (config.debugEnabled()) {
+            saveDirty.set(false);
             save(plugin, config);
         }
+    }
+
+    private void buildMapIfDue(Block center, int radius) {
+        String changedColumn = surfaceColumnKey(
+                center.getWorld(), center.getX(), center.getZ());
+        surfaceTokenCache.remove(changedColumn);
+        long now = System.currentTimeMillis();
+        long next = nextSurfaceMapBuildMillis.get();
+        if (now < next || !nextSurfaceMapBuildMillis.compareAndSet(
+                next, now + 10_000L)) {
+            return;
+        }
+        buildMap(center, radius);
     }
 
     private void buildMap(Block center, int radius) {
@@ -442,26 +1467,40 @@ final class TreeEvolutionDiagnostics {
         if (!world.isChunkLoaded(chunkX, chunkZ)) {
             return "?";
         }
+        String cacheKey = surfaceColumnKey(world, x, z);
+        long now = System.currentTimeMillis();
+        CachedSurfaceToken cached = surfaceTokenCache.get(cacheKey);
+        if (cached != null && now < cached.expiresMillis()) {
+            return cached.token();
+        }
         Block surface = world.getHighestBlockAt(x, z);
         Material type = surface.getType();
         Material below = surface.getRelative(0, -1, 0).getType();
+        String token;
         if (isLog(type) || isLog(below)) {
-            return "T";
-        }
-        if (isLeaf(type) || isLeaf(below)) {
-            return "L";
-        }
-        if (type == Material.VINE || below == Material.VINE) {
-            return "V";
-        }
-        if (type == Material.LEAF_LITTER || type == Material.SHORT_GRASS || type == Material.FERN || type == Material.PINK_PETALS
+            token = "T";
+        } else if (isLeaf(type) || isLeaf(below)) {
+            token = "L";
+        } else if (type == Material.VINE || below == Material.VINE) {
+            token = "V";
+        } else if (type == Material.LEAF_LITTER || type == Material.SHORT_GRASS || type == Material.FERN || type == Material.PINK_PETALS
                 || type.name().endsWith("_SAPLING") || type == Material.MANGROVE_PROPAGULE || type == Material.BROWN_MUSHROOM || type == Material.RED_MUSHROOM) {
-            return "U";
+            token = "U";
+        } else if (below == Material.GRASS_BLOCK || below == Material.DIRT || below == Material.PODZOL || below == Material.MOSS_BLOCK) {
+            token = "G";
+        } else {
+            token = ".";
         }
-        if (below == Material.GRASS_BLOCK || below == Material.DIRT || below == Material.PODZOL || below == Material.MOSS_BLOCK) {
-            return "G";
+        if (surfaceTokenCache.size() > 8192) {
+            surfaceTokenCache.clear();
         }
-        return ".";
+        surfaceTokenCache.put(cacheKey,
+                new CachedSurfaceToken(token, now + 30_000L));
+        return token;
+    }
+
+    private String surfaceColumnKey(World world, int x, int z) {
+        return world.getUID() + ":" + x + ":" + z;
     }
 
     private void buildPlan3dMap(TreeEvolutionConfig config, TreeDna dna, List<PlannedTreeBlock> orderedBlocks, World world) {
@@ -476,6 +1515,10 @@ final class TreeEvolutionDiagnostics {
         int fullMinZ = Integer.MAX_VALUE;
         int fullMaxZ = Integer.MIN_VALUE;
         Map<TreeBlockRole, Integer> roleCounts = new EnumMap<>(TreeBlockRole.class);
+        Map<TreePlacementAugment, Integer> augmentCounts =
+                new EnumMap<>(TreePlacementAugment.class);
+        Map<String, List<String>> augmentCoordinates =
+                new LinkedHashMap<>();
         for (PlannedTreeBlock block : orderedBlocks) {
             fullMinX = Math.min(fullMinX, block.x());
             fullMaxX = Math.max(fullMaxX, block.x());
@@ -484,6 +1527,21 @@ final class TreeEvolutionDiagnostics {
             fullMinZ = Math.min(fullMinZ, block.z());
             fullMaxZ = Math.max(fullMaxZ, block.z());
             roleCounts.merge(block.role(), 1, Integer::sum);
+            augmentCounts.merge(block.augment(), 1, Integer::sum);
+            List<String> coordinates = augmentCoordinates.computeIfAbsent(
+                    block.augment().name(), ignored -> new ArrayList<>());
+            if (coordinates.size() < 64) {
+                coordinates.add(block.x() + "," + block.y() + ","
+                        + block.z() + " role=" + block.role()
+                        + " material=" + block.material()
+                        + (block.hasBranchPath()
+                                ? " branch=" + block.branchId() + ":"
+                                        + block.branchStep()
+                                        + " parent=" + block.parentX() + ","
+                                        + block.parentY() + ","
+                                        + block.parentZ()
+                                : ""));
+            }
         }
 
         int radius = Math.max(4, Math.min(18, config.debugMapRadius()));
@@ -513,6 +1571,7 @@ final class TreeEvolutionDiagnostics {
         List<Map<String, Object>> liveLayers = new ArrayList<>();
         List<Map<String, Object>> voxelModelLayers = new ArrayList<>();
         List<Map<String, Object>> voxelLiveStatusLayers = new ArrayList<>();
+        Map<String, Character> currentVoxelStatus = new HashMap<>();
         int livePlaced = 0;
         int liveMissing = 0;
         int liveBlocked = 0;
@@ -563,7 +1622,12 @@ final class TreeEvolutionDiagnostics {
                     }
                     liveRow.append(liveToken);
                     voxelModelRow.append(voxelModelDigit(plannedBlock));
-                    voxelLiveStatusRow.append(voxelLiveStatusDigit(plannedBlock, liveToken));
+                    char voxelStatus = voxelLiveStatusDigit(
+                            plannedBlock, liveToken);
+                    voxelLiveStatusRow.append(voxelStatus);
+                    if (plannedBlock != null) {
+                        currentVoxelStatus.put(key, voxelStatus);
+                    }
                 }
                 rows.add(row.toString());
                 liveRows.add(liveRow.toString());
@@ -617,6 +1681,14 @@ final class TreeEvolutionDiagnostics {
         for (TreeBlockRole role : TreeBlockRole.values()) {
             counts.put(role.name(), roleCounts.getOrDefault(role, 0));
         }
+        Map<String, Integer> labeledCounts = new LinkedHashMap<>();
+        for (TreePlacementAugment augment
+                : TreePlacementAugment.values()) {
+            int count = augmentCounts.getOrDefault(augment, 0);
+            if (count > 0) {
+                labeledCounts.put(augment.name(), count);
+            }
+        }
 
         lastPlan3dSummary = "target-plan species=" + dna.species().id()
                 + " stage=" + dna.maturityStage()
@@ -628,6 +1700,8 @@ final class TreeEvolutionDiagnostics {
                 + " clipped=" + clipped;
         lastPlan3dBounds = bounds;
         lastPlan3dRoleCounts = counts;
+        lastPlan3dAugmentCounts = labeledCounts;
+        lastPlan3dAugmentCoordinateIndex = augmentCoordinates;
         lastPlan3dLayers = layers;
 
         Map<String, Object> liveCounts = new LinkedHashMap<>();
@@ -658,6 +1732,42 @@ final class TreeEvolutionDiagnostics {
         lastVoxelGridAxes = voxelAxes;
         lastVoxelModelLayers = voxelModelLayers;
         lastVoxelLiveStatusLayers = voxelLiveStatusLayers;
+        lastVoxelStatusDelta = voxelStatusDelta(
+                dna.key(), currentVoxelStatus);
+    }
+
+    private List<String> voxelStatusDelta(
+            String treeKey, Map<String, Character> current) {
+        Map<String, Character> immutableCurrent = Map.copyOf(current);
+        Map<String, Character> previous = previousVoxelStatusByTree.put(
+                treeKey, immutableCurrent);
+        if (previousVoxelStatusByTree.size() > 64) {
+            previousVoxelStatusByTree.keySet().stream()
+                    .filter(key -> !key.equals(treeKey))
+                    .findFirst()
+                    .ifPresent(previousVoxelStatusByTree::remove);
+        }
+        if (previous == null) {
+            return List.of("initial-snapshot planned-voxels="
+                    + immutableCurrent.size());
+        }
+        java.util.TreeSet<String> coordinates = new java.util.TreeSet<>();
+        coordinates.addAll(previous.keySet());
+        coordinates.addAll(immutableCurrent.keySet());
+        List<String> delta = new ArrayList<>();
+        for (String coordinate : coordinates) {
+            char before = previous.getOrDefault(coordinate, '0');
+            char after = immutableCurrent.getOrDefault(coordinate, '0');
+            if (before == after) {
+                continue;
+            }
+            delta.add(coordinate + " " + before + "->" + after);
+            if (delta.size() >= 512) {
+                delta.add("truncated-after=512");
+                break;
+            }
+        }
+        return List.copyOf(delta);
     }
 
     private void countLiveRole(Map<TreeBlockRole, int[]> counts, PlannedTreeBlock plannedBlock, int index) {
@@ -782,13 +1892,15 @@ final class TreeEvolutionDiagnostics {
         saveMap(plugin);
         save3dDebug(plugin, config);
         saveReplayDebug(plugin, config);
+        deformationHistory.save(plugin);
     }
 
     private void saveTrace(EvolutionPlugin plugin, TreeEvolutionConfig config) {
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("session-started-at", sessionStartedAt);
         yaml.set("enabled", config.enabled());
-        yaml.set("step-ticks", config.stepTicks());
+        yaml.set("discovery-step-ticks", config.stepTicks());
+        yaml.set("construction-step-ticks", config.constructionStepTicks());
         yaml.set("testing-enabled", config.testingEnabled());
         yaml.set("counters.searches", searches.get());
         yaml.set("counters.candidates", candidates.get());
@@ -804,6 +1916,10 @@ final class TreeEvolutionDiagnostics {
         yaml.set("counters.stage-transitions", stageTransitions.get());
         yaml.set("counters.dna-normalized", dnaNormalized.get());
         yaml.set("counters.constructor-decisions", constructorDecisions.get());
+        yaml.set("counters.clean-tree-observations",
+                cleanTreeObservations.get());
+        yaml.set("counters.observation-promotions",
+                observationPromotions.get());
         yaml.set("last-plan-summary", lastPlanSummary);
         yaml.set("last-plan-next-10", lastPlanPreview);
         yaml.set("last-stage-snapshot", lastStageSnapshot);
@@ -835,8 +1951,8 @@ final class TreeEvolutionDiagnostics {
         if (!config.debug3dEnabled()) {
             return;
         }
+        YamlConfiguration yaml = new YamlConfiguration();
         synchronized (threeDimensionalSnapshotLock) {
-            YamlConfiguration yaml = new YamlConfiguration();
             yaml.set("session-started-at", sessionStartedAt);
             yaml.set("enabled", true);
         yaml.set("testing.enabled", config.testingEnabled());
@@ -871,6 +1987,12 @@ final class TreeEvolutionDiagnostics {
         yaml.set("plan-3d.summary", lastPlan3dSummary);
         yaml.set("plan-3d.bounds", lastPlan3dBounds);
         yaml.set("plan-3d.role-counts", lastPlan3dRoleCounts);
+        yaml.set("plan-3d.planner-augment-counts",
+                lastPlan3dAugmentCounts);
+        yaml.set("plan-3d.planner-augment-coordinate-index",
+                lastPlan3dAugmentCoordinateIndex);
+        yaml.set("plan-3d.planner-augment-notes",
+                "## Each coordinate names the exact target-shape augment. Pair it with the constructor smoke tag in action/replay logs to distinguish recipe errors from placement-order errors. Coordinate samples are capped at 64 per augment.");
         yaml.set("plan-3d.layers", lastPlan3dLayers);
         yaml.set("live-3d.legend.uppercase", "planned block is already present in the live world");
         yaml.set("live-3d.legend.lowercase", "planned block is missing but the live block is placeable");
@@ -898,11 +2020,27 @@ final class TreeEvolutionDiagnostics {
         yaml.set("voxel-grid.live-status.legend.3", "model expects a block here, but a different non-replaceable block is blocking it");
         yaml.set("voxel-grid.live-status.legend.4", "not checked because the chunk is unloaded or owned by another Folia region");
         yaml.set("voxel-grid.live-status.layers", lastVoxelLiveStatusLayers);
+        yaml.set("voxel-grid.live-status.delta-from-previous-deep-frame",
+                lastVoxelStatusDelta);
         yaml.set("voxel-grid.notes", "## Battleship-style numeric cube. Read each Y layer as a z/x grid. The model grid is the planned tree; live-status shows whether that exact coordinate has caught up.");
+        yaml.set("constructor-stage-frames",
+                new ArrayList<>(recentConstructorStageFrames));
+        yaml.set("constructor-stage-frames-notes",
+                "## Continuous frames keep hierarchy contracts. Deep frames are sampled, completed, or anomalous and store voxel deltas instead of duplicate full cubes.");
+        yaml.set("live-voxel-captures",
+                new ArrayList<>(liveVoxelEnvironmentCaptures.values()));
+        yaml.set("live-voxel-captures-notes",
+                "## Up to sixteen sparse local neighborhoods with atomically paired DNA snapshots; blocked constructors refresh after a bounded cooldown.");
+        yaml.set("deformation-history-file",
+                TreeDeformationHistoryStore.FILE_NAME);
+        yaml.set("deformation-history-notes",
+                "## Persistent per-coordinate timelines and anomaly bundles live in the separate bounded history file.");
         yaml.set("recent-stage-events", stageSnapshot());
         yaml.set("notes", "## 3dDebug stage/shape trace. plan-3d is the target. live-3d overlays actual world progress: uppercase is placed, lowercase is still missing/placeable, X is blocked, ? is unloaded or another Folia region.");
-            saveYaml(plugin, yaml, "tree-evolution-3dDebug.yml");
         }
+        // ## YAML serialization and disk I/O must never retain the live voxel
+        // lock. Region threads only pause long enough to copy immutable values.
+        saveYaml(plugin, yaml, "tree-evolution-3dDebug.yml");
     }
 
     private void saveReplayDebug(EvolutionPlugin plugin, TreeEvolutionConfig config) {
@@ -916,6 +2054,7 @@ final class TreeEvolutionDiagnostics {
         yaml.set("summary", lastReplaySummary);
         yaml.set("role-progress", lastReplayRoleProgress);
         yaml.set("provenance-counts", lastReplayProvenanceCounts);
+        yaml.set("planner-augment-counts", lastReplayAugmentCounts);
         yaml.set("samples", lastReplaySamples);
         yaml.set("legend.MATCHED_PLAN", "planned block already exists in the live world");
         yaml.set("legend.MISSING_REPLACEABLE", "missing but air/replaceable, so normal growth can place it");
@@ -936,6 +2075,8 @@ final class TreeEvolutionDiagnostics {
             return;
         }
         try {
+            DebugFileRotator.rotateIfOversized(
+                    plugin, file, 8L * 1024L * 1024L, 2);
             yaml.save(file);
         } catch (IOException ex) {
             plugin.getLogger().log(Level.WARNING, "Could not save Evolution " + name + ".", ex);
@@ -991,11 +2132,32 @@ final class TreeEvolutionDiagnostics {
                 + "x" + TreeSpeciesStageStyle.canopyRadiusZ(dna));
         snapshot.put("stage-canopy-layers", TreeSpeciesStageStyle.canopyLayerCount(dna));
         snapshot.put("trunk-width", dna.trunkWidth());
+        snapshot.put("variant", dna.variant().id());
+        snapshot.put("source-pattern", sourcePattern(dna));
         snapshot.put("personality", dna.personality().name());
         snapshot.put("rarity", dna.rarity().name());
         snapshot.put("sample", dna.profileSampleId());
         snapshot.put("source", dna.profileSampleSource());
         snapshot.put("planned-blocks", plan.size());
+        TreeBlueprintValidation blueprint = plan.blueprintValidation();
+        Map<String, Object> blueprintSnapshot = new LinkedHashMap<>();
+        blueprintSnapshot.put("approved", blueprint.approved());
+        blueprintSnapshot.put("origin", blueprint.origin());
+        blueprintSnapshot.put("coordinate-proposals",
+                blueprint.coordinateProposals());
+        blueprintSnapshot.put("coordinate-conflicts",
+                blueprint.coordinateConflicts());
+        blueprintSnapshot.put("rooted-wood",
+                blueprint.rootedWood() + "/" + blueprint.plannedWood());
+        blueprintSnapshot.put("covered-branch-tips",
+                blueprint.coveredBranchTips() + "/"
+                        + blueprint.branchTips());
+        blueprintSnapshot.put("failures", blueprint.failures());
+        blueprintSnapshot.put("conflict-samples",
+                blueprint.conflictSamples().stream().limit(8).toList());
+        blueprintSnapshot.put("notes",
+                "## The centerpiece blueprint coordinator translated and approved every target XYZ before the runtime constructor received it.");
+        snapshot.put("blueprint-coordinator", blueprintSnapshot);
         snapshot.put("notes", "## Stage snapshot is refreshed whenever a target tree plan is built.");
         return snapshot;
     }
@@ -1041,7 +2203,39 @@ final class TreeEvolutionDiagnostics {
         return material.name().endsWith("_LEAVES");
     }
 
+    private String sourcePattern(TreeDna dna) {
+        TreeSourcePattern source = dna.sourcePattern();
+        return "measured=" + source.measured()
+                + ",height=" + source.height()
+                + ",footprint=" + source.trunkFootprint()
+                + ",branch-spread=" + source.branchSpread()
+                + ",canopy=" + source.canopyRadius()
+                + "x" + source.canopyDepth()
+                + ",tiers=" + source.crownTiers()
+                + ",drift=" + source.trunkDrift();
+    }
+
     private double round(double value) {
         return Math.round(value * 100.0D) / 100.0D;
+    }
+
+    private record CachedSurfaceToken(String token, long expiresMillis) {
+    }
+
+    private record DeformationAnalysisJob(
+            TreeEvolutionConfig config,
+            String treeKey,
+            TreeSpecies species,
+            TreeVariant variant,
+            TreeMaturityStage maturityStage,
+            TreeGrowthIntent intent,
+            long shapeRevision,
+            String trigger,
+            boolean finalState,
+            boolean force,
+            Map<String, Object> capture,
+            List<TreeVoxelSnapshotRenderer.Voxel> original,
+            List<TreeVoxelSnapshotRenderer.Voxel> target
+    ) {
     }
 }

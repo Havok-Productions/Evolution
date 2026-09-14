@@ -29,7 +29,6 @@ final class TreeCanopyRepairService {
     private final TreeEvolutionDiagnostics diagnostics;
     private final TreeDnaRepository repository;
     private final TreePlanAuditService planAudit;
-    private final TreeMaturityService maturityService;
     private final AtomicLong changedBlocks;
 
     TreeCanopyRepairService(
@@ -37,44 +36,21 @@ final class TreeCanopyRepairService {
             TreeEvolutionDiagnostics diagnostics,
             TreeDnaRepository repository,
             TreePlanAuditService planAudit,
-            TreeMaturityService maturityService,
             AtomicLong changedBlocks
     ) {
         this.plugin = plugin;
         this.diagnostics = diagnostics;
         this.repository = repository;
         this.planAudit = planAudit;
-        this.maturityService = maturityService;
         this.changedBlocks = changedBlocks;
     }
     Optional<Block> findExposedUpperLog(TreeCandidate candidate, TreeDna dna,
             Map<String, PlannedTreeBlock> blocksByKey) {
-        World world = candidate.world();
-        int liveHeight = maturityService.liveTrunkHeight(world, dna);
-        int liveTop = dna.baseY() + liveHeight - 1;
-        int startY = Math.max(dna.baseY(), liveTop - 3);
-        for (int y = liveTop; y >= startY; y--) {
-            int width = TreeSpeciesStageStyle.trunkWidthAt(dna, y);
-            int radius = Math.max(0, width / 2);
-            int centerX = dna.trunkXAt(y);
-            int centerZ = dna.trunkZAt(y);
-            for (int x = -radius; x <= radius; x++) {
-                for (int z = -radius; z <= radius; z++) {
-                    Block block = world.getBlockAt(centerX + x, y, centerZ + z);
-                    if (block.getType() == dna.species().logMaterial()
-                            && TreeCanopyIntegrityPolicy.requiresCanopyCover(
-                                    block.getX(), block.getY(), block.getZ(),
-                                    dna.species().leafMaterial(), blocksByKey)
-                            && planAudit.adjacentPlannedLeafContacts(
-                                    world, dna, block,
-                                    dna.species().leafMaterial(),
-                                    blocksByKey) == 0) {
-                        return Optional.of(block);
-                    }
-                }
-            }
-        }
-        return Optional.empty();
+        // ## The hierarchy count and the mini-constructor must consume the
+        // same blueprint-derived target. Recomputing trunk height here used to
+        // select nearby branch wood and produce an impossible repair request.
+        return planAudit.firstExposedUpperLog(
+                candidate, dna, blocksByKey);
     }
 
     int maybeCoverExposedTopLog(TreeCandidate candidate, TreeDna dna,
@@ -273,7 +249,8 @@ final class TreeCanopyRepairService {
             return false;
         }
 
-        boolean preexistingLeaf = leaf.getType() == leafMaterial;
+        Material previousMaterial = leaf.getType();
+        boolean preexistingLeaf = previousMaterial == leafMaterial;
         boolean originalLeaf = dna.isOriginalShapeLeaf(ownershipKey);
         boolean sourceReform = TreeBranchEnvelopeOwnershipPolicy
                 .shouldReformOriginalLeaf(
@@ -284,6 +261,16 @@ final class TreeCanopyRepairService {
         changedBlocks.incrementAndGet();
         repository.markDirty("owned canopy leaf " + ownershipKey);
                 planAudit.invalidateLiveAnalysis(dna.key());
+        diagnostics.recordCanopyRepairMutation(
+                plugin, currentConfig, dna, leaf, previousMaterial, planned,
+                "branch-envelope".equals(reason)
+                        ? org.evolution.features.treeevolution.constructor
+                                .TreeConstructionSubrule
+                                .OWNED_BRANCH_ENVELOPE
+                        : org.evolution.features.treeevolution.constructor
+                                .TreeConstructionSubrule
+                                .COVER_EXPOSED_SUPPORT,
+                reason);
         plugin.pathDebug().trace(plugin, "tree-evolution",
                 preexistingLeaf
                         ? "audit.branch-envelope-leaf-reformed"

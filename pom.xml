@@ -31,7 +31,9 @@
         <dependency>
             <groupId>dev.folia</groupId>
             <artifactId>folia-api</artifactId>
-            <version>[26.1.2.build,)</version>
+            <!-- ## Pin the stable API used by the target server. An open range
+                 silently selected 26.2 beta and made builds non-reproducible. -->
+            <version>26.1.2.build.8-stable</version>
             <scope>provided</scope>
         </dependency>
         <dependency>

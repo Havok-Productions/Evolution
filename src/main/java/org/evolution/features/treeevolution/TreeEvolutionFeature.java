@@ -28,6 +28,7 @@ import org.bukkit.event.world.StructureGrowEvent;
 import org.evolution.coreparts.PluginFeature;
 import org.evolution.coreparts.ResourceReporter.ReportSample;
 import org.evolution.coreparts.EvolutionPlugin;
+import org.evolution.features.treeevolution.constructor.executor.TreeConstructionResult;
 
 public final class TreeEvolutionFeature implements PluginFeature, Listener {
     private static final Set<Material> NATURAL_GROUND = Set.of(
@@ -70,6 +71,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     private final TreeGroundDetailPolicy groundDetailPolicy =
             new TreeGroundDetailPolicy(NATURAL_GROUND, NATURAL_DETAILS);
     private final TreeDnaNormalizer dnaNormalizer = new TreeDnaNormalizer();
+    private final TreeLeafOwnershipIndex leafOwnershipIndex =
+            new TreeLeafOwnershipIndex();
     private final TreeEvolutionDiagnostics diagnostics = new TreeEvolutionDiagnostics();
     private final TreePlanAuditService planAudit;
     private final TreeProfileScanService profileScanService;
@@ -81,23 +84,37 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     private final TreePlacementService placementService;
     private final TreeCanopyRepairService canopyRepairService;
     private final TreeTransitionService transitionService;
+    private final TreeLeafDecayService leafDecayService;
     private final TreeConstructionRuntime constructionRuntime;
     private final ConcurrentMap<String, TreeDna> treeDna;
     private final ConcurrentMap<UUID, TreeFocusPool> focusedTreePools = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> focusYieldUntil = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, CachedTreeCandidate> focusedCandidateCache = new ConcurrentHashMap<>();
+    private final TreeDirtyWorkQueue dirtyTreeWork = new TreeDirtyWorkQueue();
+    private final ConcurrentMap<String, Long> completedTreeBackoff =
+            new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> nextTreeObservationMillis =
+            new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, Long> nextPlayerObservationSweep =
+            new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, Long> nextPlayerDiscoverySweep =
+            new ConcurrentHashMap<>();
     private final AtomicLong changedBlocks = new AtomicLong();
     private volatile TreeEvolutionConfig config;
 
     public TreeEvolutionFeature(EvolutionPlugin plugin) {
         this.plugin = plugin;
-        this.planAudit = new TreePlanAuditService(
-                plugin, diagnostics, changedBlocks, () -> config);
         this.profileScanService = new TreeProfileScanService(plugin);
-        this.dnaRepository = new TreeDnaRepository(plugin, dnaNormalizer, diagnostics);
+        this.dnaRepository = new TreeDnaRepository(
+                plugin, dnaNormalizer, diagnostics, leafOwnershipIndex);
         this.treeDna = dnaRepository.records();
+        this.planAudit = new TreePlanAuditService(
+                plugin, diagnostics, changedBlocks, () -> config,
+                leafOwnershipIndex);
         this.candidateDiscovery = new TreeCandidateDiscoveryService(
-                plugin, diagnostics, treeDna, NATURAL_GROUND, NATURAL_DETAILS, this::isNearPlayer);
+                plugin, diagnostics, treeDna, NATURAL_GROUND, NATURAL_DETAILS,
+                this::isNearPlayer,
+                plugin.playerPlacedTreeBlocks()::containsKey);
         this.reproductionService = new TreeReproductionService(
                 plugin, diagnostics, dnaRepository, NATURAL_GROUND, NATURAL_DETAILS,
                 changedBlocks, this::canWorkAt);
@@ -108,11 +125,11 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 plugin, diagnostics, dnaRepository, planAudit, maturityService,
                 groundDetailPolicy, changedBlocks, NATURAL_GROUND, NATURAL_DETAILS);
         this.canopyRepairService = new TreeCanopyRepairService(
-                plugin, diagnostics, dnaRepository, planAudit, maturityService,
-                changedBlocks);
+                plugin, diagnostics, dnaRepository, planAudit, changedBlocks);
         this.transitionService = new TreeTransitionService(
                 plugin, diagnostics, dnaRepository, planAudit, placementService,
                 changedBlocks);
+        this.leafDecayService = new TreeLeafDecayService(plugin);
         this.constructionRuntime = new TreeConstructionRuntime(
                 plugin, diagnostics, dnaRepository, candidateDiscovery, planAudit,
                 maturityService, placementService, canopyRepairService,
@@ -133,6 +150,7 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
 
     @Override
     public void onEnable() {
+        diagnostics.initialize(plugin);
         profileScanService.initialize(config);
         loadTreeDna();
         cleanupTreeDna("startup");
@@ -150,6 +168,11 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         focusedTreePools.clear();
         focusedCandidateCache.clear();
         focusYieldUntil.clear();
+        completedTreeBackoff.clear();
+        dirtyTreeWork.clear();
+        nextTreeObservationMillis.clear();
+        nextPlayerObservationSweep.clear();
+        nextPlayerDiscoverySweep.clear();
         reproductionService.clearPlayerState();
         planAudit.clear();
     }
@@ -162,6 +185,11 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         focusedTreePools.clear();
         focusedCandidateCache.clear();
         focusYieldUntil.clear();
+        completedTreeBackoff.clear();
+        dirtyTreeWork.clear();
+        nextTreeObservationMillis.clear();
+        nextPlayerObservationSweep.clear();
+        nextPlayerDiscoverySweep.clear();
         reproductionService.clearPlayerState();
         planAudit.clear();
         plugin.pathDebug().trace(plugin, "tree-evolution", "config.reload", config.summary());
@@ -323,6 +351,15 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
+        if (plugin.playerPlacedTreeBlocks().contains(block)) {
+            candidateDiscovery.clearSpatialCaches();
+            focusedCandidateCache.clear();
+            plugin.pathDebug().trace(
+                    plugin, "tree-evolution", "break.skip-player-wood",
+                    block.getType() + " at " + format(block)
+                            + " ## player construction cannot create or damage tree DNA");
+            return;
+        }
         if (TreeSpecies.fromSaplingMaterial(block.getType()).isPresent()) {
             reproductionService.forgetSeedling(
                     block, config, "block-broken");
@@ -342,9 +379,16 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         }
 
         TreeDna dna = dnaFor(candidate.get());
-        boolean lowest = candidate.get().baseX() == block.getX()
-                && candidate.get().baseY() == block.getY()
-                && candidate.get().baseZ() == block.getZ();
+        // ## A side branch can be discovered as a short vertical log column
+        // and still resolve to nearby persisted DNA. Stump damage is therefore
+        // checked against the canonical DNA base, never the discovery alias.
+        boolean lowest = dna.baseX() == block.getX()
+                && dna.baseY() == block.getY()
+                && dna.baseZ() == block.getZ();
+        // ## Every natural-log break rechecks the complete leaf graph. Leaves
+        // connected through any direct or indirect leaf chain remain; only
+        // components with no path back to live wood are released to decay.
+        leafDecayService.auditConnectivity(candidate.get(), dna);
         if (lowest) {
             dna.setStumpPresent(false);
             diagnostics.recordStalled(config, dna, "stump removed at " + format(block));
@@ -354,6 +398,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             diagnostics.recordStalled(config, dna, "damage stall until=" + dna.stalledUntilMillis() + " at " + format(block));
             plugin.pathDebug().trace(plugin, "tree-evolution", "break.damage-stall", format(block));
         }
+        completedTreeBackoff.remove(dna.key());
+        dirtyTreeWork.mark(dna.key());
         saveTreeDna();
         diagnostics.saveSoon(plugin, config);
     }
@@ -376,10 +422,16 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
 
     private long focusedScheduleDelay(UUID playerId, TreeEvolutionConfig currentConfig) {
         TreeFocusPool pool = focusedTreePools.get(playerId);
-        int activeTrees = pool == null ? 1 : Math.max(1, pool.size());
-        // ## More active trees increase scheduler frequency, not per-tree speed.
-        // Each candidate therefore keeps its configured cadence without a burst.
-        return Math.max(1L, (currentConfig.stepTicks() + activeTrees - 1L) / activeTrees);
+        if (pool == null || pool.size() == 0) {
+            return currentConfig.stepTicks();
+        }
+        int activeTrees = pool.size();
+        // ## More active trees increase scheduler frequency, not per-tree
+        // block count. Every focused tree therefore receives testing-speed
+        // construction while discovery remains on the slower intake clock.
+        return Math.max(1L,
+                (currentConfig.constructionStepTicks() + activeTrees - 1L)
+                        / activeTrees);
     }
     private int runNearPlayer(Player player, boolean forced) {
         try (ReportSample sample = plugin.resourceReporter().begin(
@@ -431,11 +483,32 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 }
             }
 
-            if (pool.size() < TreeFocusPool.CAPACITY) {
+            observeOneNonDirtyTree(
+                    playerId, origin, pool, currentConfig);
+
+            boolean discoveryDue = forced
+                    || claimDiscoverySweep(playerId, currentConfig);
+            if (pool.size() < TreeFocusPool.CAPACITY && discoveryDue) {
                 int discoveryLimit = Math.min(
                         currentConfig.attemptsPerStep(), TreeFocusPool.CAPACITY * 2);
-                List<TreeCandidate> discovered = new ArrayList<>(
-                        findKnownCandidatesNear(origin, currentConfig, discoveryLimit));
+                List<TreeCandidate> discovered = new ArrayList<>();
+                for (String dirtyKey : dirtyTreeWork.takeNear(
+                        world.getUID(), origin.getBlockX(), origin.getBlockZ(),
+                        currentConfig.searchRadius(), treeDna,
+                        discoveryLimit)) {
+                    Optional<TreeCandidate> dirtyCandidate = focusedCandidateFor(
+                            dirtyKey, origin, currentConfig);
+                    if (dirtyCandidate.isPresent()) {
+                        discovered.add(dirtyCandidate.get());
+                    } else {
+                        dirtyTreeWork.mark(dirtyKey);
+                    }
+                }
+                if (discovered.size() < discoveryLimit) {
+                    discovered.addAll(findKnownCandidatesNear(
+                            origin, currentConfig,
+                            discoveryLimit - discovered.size()));
+                }
                 findNearestCandidate(origin, Math.min(18, currentConfig.searchRadius()))
                         .ifPresent(discovered::add);
                 int randomSearches = 0;
@@ -445,13 +518,25 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 }
 
                 Set<String> inspectedTrees = new HashSet<>();
-                for (TreeCandidate candidate : discovered) {
-                    TreeDna dna = dnaFor(candidate);
+                for (TreeCandidate discoveredCandidate : discovered) {
+                    TreeDna dna = dnaFor(discoveredCandidate);
                     if (!inspectedTrees.add(dna.key())) {
                         continue;
                     }
+                    Optional<TreeCandidate> canonicalCandidate =
+                            canonicalCandidateFor(
+                                    discoveredCandidate, dna,
+                                    currentConfig);
+                    if (canonicalCandidate.isEmpty()) {
+                        continue;
+                    }
+                    TreeCandidate candidate = canonicalCandidate.get();
                     if (pool.contains(dna.key())) {
-                        activeCandidates.put(dna.key(), candidate);
+                        // ## A previously focused tree already has a canonical
+                        // candidate reconstructed from its DNA stump. Discovery
+                        // may touch a branch column from the same crown; it must
+                        // never replace the rooted candidate with that alias.
+                        activeCandidates.putIfAbsent(dna.key(), candidate);
                         continue;
                     }
                     if (focusCoolingDown(dna.key())) {
@@ -473,13 +558,22 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                                         + " slot=" + pool.size() + "/" + TreeFocusPool.CAPACITY
                                         + " stage=" + dna.maturityStage() + " " + status.summary()
                                         + " ## this candidate keeps its slot until complete or bounded yield");
-                    } else if (!status.needsFocus() && backgroundKeys.add(dna.key())) {
+                    } else if (!status.needsFocus()
+                            && completedWorkDue(dna.key(), currentConfig)
+                            && backgroundKeys.add(dna.key())) {
                         backgroundCandidates.add(candidate);
                     }
                     if (pool.size() >= TreeFocusPool.CAPACITY) {
                         break;
                     }
                 }
+            }
+            if (!discoveryDue && pool.size() < TreeFocusPool.CAPACITY) {
+                plugin.pathDebug().traceSampled(plugin, "tree-evolution",
+                        "discovery.waiting-intake-clock",
+                        "active=" + pool.size() + "/" + TreeFocusPool.CAPACITY
+                                + " ## active construction stays fast while"
+                                + " new-tree intake remains slow");
             }
 
             int blockBudget = currentConfig.blocksPerStep();
@@ -524,15 +618,29 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                     before = treeWorkStatus(candidate, dna, currentConfig);
                 }
                 if (!before.needsFocus()) {
+                    leafDecayService.auditConnectivity(candidate, dna);
                     releaseFocusedTree(pool, dna.key(), "complete",
                             "stage=" + dna.maturityStage() + " " + before.summary());
-                    if (backgroundKeys.add(dna.key())) {
+                    if (completedWorkDue(dna.key(), currentConfig)
+                            && backgroundKeys.add(dna.key())) {
                         backgroundCandidates.add(candidate);
                     }
                     continue;
                 }
 
-                boolean changed = constructionRuntime.evolve(candidate, dna, currentConfig);
+                TreeConstructionResult constructionResult =
+                        constructionRuntime.evolve(
+                                candidate, dna, currentConfig);
+                dnaRepository.refreshOwnership(dna);
+                boolean changed = constructionResult.worldChanged();
+                boolean progressed = constructionResult.progressed();
+                if (changed || progressed) {
+                    dirtyTreeWork.mark(dna.key());
+                    completedTreeBackoff.remove(dna.key());
+                }
+                if (progressed && !changed) {
+                    dnaStateChanged = true;
+                }
                 if (changed) {
                     placed++;
                     chunkActivity.merge(chunkKey, 1, Integer::sum);
@@ -543,18 +651,22 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                     after = treeWorkStatus(candidate, dna, currentConfig);
                 }
                 if (!after.needsFocus()) {
+                    leafDecayService.auditConnectivity(candidate, dna);
                     releaseFocusedTree(pool, dna.key(), "complete",
                             "stage=" + dna.maturityStage() + " " + after.summary());
                 } else {
-                    int noProgress = pool.updateProgress(dna.key(), changed);
+                    int noProgress = pool.updateProgress(
+                            dna.key(), progressed);
                     if (TreeFocusPolicy.shouldYield(noProgress)) {
                         long cooldown = currentConfig.testingEnabled() ? 3_000L : 30_000L;
                         focusYieldUntil.put(dna.key(), System.currentTimeMillis() + cooldown);
+                        leafDecayService.auditConnectivity(candidate, dna);
                         releaseFocusedTree(pool, dna.key(), "no-progress",
                                 "passes=" + noProgress + " cooldown-ms=" + cooldown + " " + after.summary());
                     } else {
                         plugin.pathDebug().traceSampled(plugin, "tree-evolution", "focus.retain",
                                 "tree=" + dna.key() + " changed=" + changed
+                                        + " progressed=" + progressed
                                         + " no-progress=" + noProgress + "/"
                                         + TreeFocusPolicy.MAX_NO_PROGRESS_PASSES
                                         + " active=" + pool.size() + "/" + TreeFocusPool.CAPACITY
@@ -571,6 +683,13 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 }
                 attempts++;
                 TreeDna dna = dnaFor(candidate);
+                Optional<TreeCandidate> canonicalCandidate =
+                        canonicalCandidateFor(
+                                candidate, dna, currentConfig);
+                if (canonicalCandidate.isEmpty()) {
+                    continue;
+                }
+                candidate = canonicalCandidate.get();
                 if (pool.contains(dna.key()) || (!forced && !canGrowNow(dna, currentConfig, candidate))) {
                     continue;
                 }
@@ -578,7 +697,21 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 if (chunkActivity.getOrDefault(chunkKey, 0) >= 3) {
                     continue;
                 }
-                if (constructionRuntime.evolve(candidate, dna, currentConfig)) {
+                TreeConstructionResult backgroundResult =
+                        constructionRuntime.evolve(
+                                candidate, dna, currentConfig);
+                dnaRepository.refreshOwnership(dna);
+                if (backgroundResult.worldChanged()
+                        || backgroundResult.progressed()) {
+                    dirtyTreeWork.mark(dna.key());
+                } else {
+                    markCompletedBackoff(dna.key(), currentConfig);
+                }
+                if (backgroundResult.progressed()
+                        && !backgroundResult.worldChanged()) {
+                    dnaStateChanged = true;
+                }
+                if (backgroundResult.worldChanged()) {
                     placed++;
                     chunkActivity.merge(chunkKey, 1, Integer::sum);
                 }
@@ -617,6 +750,21 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         }
     }
 
+    private boolean claimDiscoverySweep(
+            UUID playerId,
+            TreeEvolutionConfig currentConfig
+    ) {
+        long now = System.currentTimeMillis();
+        Long due = nextPlayerDiscoverySweep.get(playerId);
+        if (due != null && now < due) {
+            return false;
+        }
+        long intervalMillis = Math.max(50L,
+                currentConfig.stepTicks() * 50L);
+        nextPlayerDiscoverySweep.put(playerId, now + intervalMillis);
+        return true;
+    }
+
     private Optional<TreeCandidate> focusedCandidateFor(
             String treeKey, Location origin, TreeEvolutionConfig currentConfig) {
         TreeDna dna = treeDna.get(treeKey);
@@ -651,6 +799,31 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 new CachedTreeCandidate(candidate.orElse(null), now + ttl));
         return candidate;
     }
+
+    private Optional<TreeCandidate> canonicalCandidateFor(
+            TreeCandidate discovered,
+            TreeDna dna,
+            TreeEvolutionConfig currentConfig
+    ) {
+        if (TreeCandidateBindingPolicy.isCanonical(discovered, dna)) {
+            return Optional.of(discovered);
+        }
+        Optional<TreeCandidate> canonical = candidateDiscovery.buildKnown(
+                discovered.world(), dna, currentConfig);
+        plugin.pathDebug().traceSampled(
+                plugin,
+                "tree-evolution",
+                canonical.isPresent()
+                        ? "state.candidate-dna-rebound"
+                        : "gate.candidate-dna-rebound-failed",
+                "discovered=" + discovered.baseKey()
+                        + " dna=" + dna.key()
+                        + " canonical="
+                        + canonical.map(TreeCandidate::baseKey)
+                                .orElse("missing")
+                        + " ## scheduler aliases are rebound to the persisted DNA stump before any hierarchy audit or mutation");
+        return canonical;
+    }
     private boolean focusCoolingDown(String treeKey) {
         Long until = focusYieldUntil.get(treeKey);
         if (until == null) {
@@ -667,6 +840,10 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             TreeFocusPool pool, String treeKey, String reason, String detail) {
         if (!pool.release(treeKey)) {
             return;
+        }
+        if ("complete".equals(reason)) {
+            dirtyTreeWork.remove(treeKey);
+            markCompletedBackoff(treeKey, config);
         }
         plugin.pathDebug().trace(plugin, "tree-evolution", "focus.release." + reason,
                 "tree=" + treeKey + " active=" + pool.size() + "/" + TreeFocusPool.CAPACITY
@@ -690,6 +867,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         int previousBurst = dna.stageGrowthBurst();
         int originalBlockCount = dna.originalShapeBlockCount();
         dna.completeStageTransition();
+        dnaRepository.refreshOwnership(dna);
+        dirtyTreeWork.mark(dna.key());
         markTreeDnaDirty("stage transition finalized " + dna.key());
         plugin.pathDebug().trace(plugin, "tree-evolution", "transition.finalize-complete",
                 "tree=" + dna.key() + " cleared-growth-burst=" + previousBurst
@@ -731,6 +910,71 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
             TreeEvolutionConfig currentConfig
     ) {
         return reproductionService.runReserved(playerId, origin, currentConfig);
+    }
+
+    private void observeOneNonDirtyTree(
+            UUID playerId,
+            Location origin,
+            TreeFocusPool pool,
+            TreeEvolutionConfig currentConfig
+    ) {
+        long now = System.currentTimeMillis();
+        long sweepInterval = currentConfig.testingEnabled()
+                ? 1_000L : 5_000L;
+        Long nextSweep = nextPlayerObservationSweep.get(playerId);
+        if (nextSweep != null && now < nextSweep) {
+            return;
+        }
+        nextPlayerObservationSweep.put(playerId, now + sweepInterval);
+
+        List<TreeCandidate> candidates =
+                candidateDiscovery.findKnownForObservation(
+                        origin,
+                        currentConfig,
+                        1,
+                        dna -> !pool.contains(dna.key())
+                                && !dirtyTreeWork.contains(dna.key()),
+                        dna -> nextTreeObservationMillis.getOrDefault(
+                                dna.key(), 0L));
+        if (candidates.isEmpty()) {
+            return;
+        }
+        TreeCandidate candidate = candidates.getFirst();
+        TreeDna dna = treeDna.get(candidate.baseKey());
+        if (dna == null) {
+            dna = findNearbyExistingDna(candidate).orElse(null);
+        }
+        if (dna == null) {
+            return;
+        }
+
+        long observationDelay = currentConfig.testingEnabled()
+                ? 30_000L : 120_000L;
+        nextTreeObservationMillis.put(
+                dna.key(), now + observationDelay);
+        try (ReportSample sample = plugin.resourceReporter().begin(
+                "tree-evolution", "audit.observe-non-dirty-tree")) {
+            TreeWorkStatus status = treeWorkStatus(
+                    candidate, dna, currentConfig);
+            boolean promoted = status.needsFocus();
+            if (promoted) {
+                completedTreeBackoff.remove(dna.key());
+                dirtyTreeWork.mark(dna.key());
+                plugin.pathDebug().trace(
+                        plugin, "tree-evolution",
+                        "audit.clean-tree-promoted-dirty",
+                        "tree=" + dna.key() + " " + status.summary()
+                                + " ## periodic observation found work that"
+                                + " dirty-event tracking did not report");
+            }
+            diagnostics.recordCleanTreeObservation(
+                    currentConfig, dna, status, promoted);
+            diagnostics.saveSoon(plugin, currentConfig);
+            sample.workUnits(1)
+                    .changedUnits(promoted ? 1 : 0)
+                    .detail("tree=" + dna.key() + " result="
+                            + (promoted ? "promoted-dirty" : "clean"));
+        }
     }
 
     private Optional<TreeCandidate> findCandidate(Location origin, TreeEvolutionConfig currentConfig) {
@@ -788,7 +1032,12 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         if (existing != null) {
             return existing;
         }
-        TreeProfileSample sample = chooseProfileSample(candidate);
+        TreeSourcePattern sourcePattern =
+                TreeSourcePattern.capture(candidate);
+        TreeVariant variant = TreeVariantClassifier.classify(
+                candidate.species(), sourcePattern);
+        TreeProfileSample sample =
+                chooseProfileSample(candidate, variant);
         TreeGrowthProfile profile = sample == null
                 ? config.profile(candidate.species()) : sample.profile();
         TreeDna rawCreated = TreeDna.create(
@@ -796,6 +1045,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
                 candidate,
                 profile,
                 sample,
+                variant,
+                sourcePattern,
                 parentKey,
                 generation);
         TreeDnaNormalizer.NormalizedDna creationNormalization =
@@ -819,6 +1070,8 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         TreeDna previous = treeDna.putIfAbsent(created.key(), created);
         TreeDna result = previous == null ? created : previous;
         if (previous == null) {
+            dnaRepository.refreshOwnership(created);
+            dirtyTreeWork.mark(created.key());
             markTreeDnaDirty("dna-create-" + creationSource);
             diagnostics.recordDnaCreated(config, created);
             plugin.pathDebug().trace(
@@ -879,30 +1132,65 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
         return Optional.ofNullable(best);
     }
 
-    private TreeProfileSample chooseProfileSample(TreeCandidate candidate) {
+    private TreeProfileSample chooseProfileSample(
+            TreeCandidate candidate,
+            TreeVariant variant
+    ) {
         List<TreeProfileSample> samples = profileScanService.samples(candidate.species());
         if (samples.isEmpty()) {
             return null;
         }
-        List<TreeProfileSample> filtered = filteredProfileSamples(candidate, samples);
+        List<TreeProfileSample> filtered =
+                filteredProfileSamples(candidate, variant, samples);
         int index = Math.floorMod(candidate.baseKey().hashCode(), filtered.size());
         return filtered.get(index);
     }
 
-    private List<TreeProfileSample> filteredProfileSamples(TreeCandidate candidate, List<TreeProfileSample> samples) {
+    private List<TreeProfileSample> filteredProfileSamples(
+            TreeCandidate candidate,
+            TreeVariant variant,
+            List<TreeProfileSample> samples
+    ) {
         List<TreeProfileSample> filtered = new ArrayList<>();
         boolean uprightTree = candidate.height() >= 5 && candidate.connectedLogs() >= 5;
+        boolean megaVariant = variant == TreeVariant.SPRUCE_MEGA
+                || variant == TreeVariant.SPRUCE_MEGA_PINE
+                || variant == TreeVariant.JUNGLE_MEGA;
+        // ## Decide scale compatibility once. Profile libraries can contain
+        // hundreds of samples, so variant filtering must remain linear.
+        boolean hasMatchingScale = samples.stream()
+                .anyMatch(sample ->
+                        megaVariant == isMegaProfileSample(sample));
         for (TreeProfileSample sample : samples) {
-            String text = (sample.id() + " " + sample.sourceFile() + " " + sample.trunkPlacer() + " " + sample.foliagePlacer()).toLowerCase(java.util.Locale.ROOT);
+            String text = profileSampleText(sample);
             if (uprightTree && isLowGrowthSample(text)) {
                 continue;
             }
             if (candidate.species() != TreeSpecies.JUNGLE && text.contains("bamboo")) {
                 continue;
             }
+            if (hasMatchingScale
+                    && megaVariant != isMegaProfileSample(sample)) {
+                continue;
+            }
             filtered.add(sample);
         }
         return filtered.isEmpty() ? samples : filtered;
+    }
+
+    private boolean isMegaProfileSample(TreeProfileSample sample) {
+        String text = profileSampleText(sample);
+        return text.contains("mega")
+                || text.contains("giant")
+                || text.contains("huge");
+    }
+
+    private String profileSampleText(TreeProfileSample sample) {
+        return (sample.id() + " "
+                + sample.sourceFile() + " "
+                + sample.trunkPlacer() + " "
+                + sample.foliagePlacer())
+                .toLowerCase(java.util.Locale.ROOT);
     }
 
     private boolean isLowGrowthSample(String text) {
@@ -996,9 +1284,36 @@ public final class TreeEvolutionFeature implements PluginFeature, Listener {
     private void invalidateTreeRuntimeState(String treeKey) {
         planAudit.invalidate(treeKey);
         focusYieldUntil.remove(treeKey);
+        completedTreeBackoff.remove(treeKey);
+        dirtyTreeWork.remove(treeKey);
+        nextTreeObservationMillis.remove(treeKey);
         reproductionService.forgetTree(treeKey);
         focusedCandidateCache.remove(treeKey);
         candidateDiscovery.clearSpatialCaches();
+    }
+
+    private boolean completedWorkDue(
+            String treeKey, TreeEvolutionConfig currentConfig) {
+        Long until = completedTreeBackoff.get(treeKey);
+        if (until == null) {
+            return true;
+        }
+        if (System.currentTimeMillis() >= until) {
+            completedTreeBackoff.remove(treeKey, until);
+            return true;
+        }
+        return false;
+    }
+
+    private void markCompletedBackoff(
+            String treeKey, TreeEvolutionConfig currentConfig) {
+        long delay = currentConfig.testingEnabled() ? 30_000L : 120_000L;
+        completedTreeBackoff.put(
+                treeKey, System.currentTimeMillis() + delay);
+        plugin.pathDebug().traceSampled(
+                plugin, "tree-evolution", "focus.complete-backoff",
+                "tree=" + treeKey + " delay-ms=" + delay
+                        + " ## completed trees retain slow monitoring without entering every player pass");
     }
 
     private void loadTreeDna() {

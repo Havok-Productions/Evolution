@@ -75,6 +75,8 @@ final class TreePlacementService {
         int start = Math.floorMod(dna.planCursor(), size);
         List<TreeShapeEngine.ShapeChoice> choices = new ArrayList<>();
         List<CandidateBlock> intentBlocks = new ArrayList<>();
+        TreeCanopyGrowthBalancePolicy canopyBalance =
+                TreeCanopyGrowthBalancePolicy.from(dna);
         int nextHeight = candidate.topY() + 1;
         int liveTop = Math.max(candidate.topY(), dna.baseY() + maturityService.liveTrunkHeight(candidate.world(), dna) - 1);
         for (int checked = 0; checked < size; checked++) {
@@ -117,7 +119,9 @@ final class TreePlacementService {
                             && isDependencyReady(candidate, dna, repairTarget, repair, intent, currentConfig, false)
                             && canPlace(candidate, dna, repairTarget, repair, currentConfig)) {
                         int originalIndex = Math.max(0, orderedBlocks.indexOf(repair));
-                        choices.add(shapeEngine.score(candidate, dna, repair, repairTarget, intent, (originalIndex + 1) % size));
+                        choices.add(scoreCandidate(
+                                candidate, dna, repair, repairTarget, intent,
+                                (originalIndex + 1) % size, canopyBalance));
                         plugin.pathDebug().traceSampled(plugin, "tree-evolution", "branch.parent-repair-choice",
                                 "child=" + plannedBlock.branchId() + ":" + plannedBlock.branchStep()
                                         + " repair-role=" + repair.role()
@@ -141,7 +145,9 @@ final class TreePlacementService {
                 }
                 continue;
             }
-            choices.add(shapeEngine.score(candidate, dna, plannedBlock, target, intent, (candidateBlock.index() + 1) % size));
+            choices.add(scoreCandidate(
+                    candidate, dna, plannedBlock, target, intent,
+                    (candidateBlock.index() + 1) % size, canopyBalance));
             if (shapeEngine.hasEnoughChoices(choices)) {
                 break;
             }
@@ -157,6 +163,29 @@ final class TreePlacementService {
         }
         diagnostics.recordShapeChoice(currentConfig, dna, best.reason(), choices.size());
         return Optional.of(new PlannedTarget(best.block(), best.target(), best.nextCursor(), best.score(), best.reason()));
+    }
+
+    private TreeShapeEngine.ShapeChoice scoreCandidate(
+            TreeCandidate candidate,
+            TreeDna dna,
+            PlannedTreeBlock block,
+            Block target,
+            TreeGrowthIntent intent,
+            int nextCursor,
+            TreeCanopyGrowthBalancePolicy canopyBalance
+    ) {
+        TreeShapeEngine.ShapeChoice base = shapeEngine.score(
+                candidate, dna, block, target, intent, nextCursor);
+        double balanceBonus = canopyBalance.bonus(block);
+        if (balanceBonus <= 0.0D) {
+            return base;
+        }
+        return new TreeShapeEngine.ShapeChoice(
+                base.block(), base.target(), base.nextCursor(),
+                base.score() + balanceBonus,
+                base.reason() + " crown-sector-load="
+                        + canopyBalance.load(block)
+                        + " balance-bonus=" + balanceBonus);
     }
 
     private Comparator<CandidateBlock> growthOrder(TreeCandidate candidate, TreeDna dna) {

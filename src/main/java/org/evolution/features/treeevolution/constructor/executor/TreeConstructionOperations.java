@@ -11,19 +11,37 @@ public interface TreeConstructionOperations {
 
     TreeConstructionResult waitForSourceSnapshot();
 
-    TreeConstructionResult repair();
+    TreeConstructionResult reconcileOwnershipRole();
+
+    TreeConstructionResult repairDisconnectedTarget();
+
+    TreeConstructionResult repairInterruptedDamage();
 
     TreeConstructionResult replaceTransitionBlocker();
 
     TreeConstructionResult buildSupport();
 
-    TreeConstructionResult buildCanopyShell();
+    TreeConstructionResult coverExposedSupport();
+
+    TreeConstructionResult retireUnplannedBareTerminal();
+
+    TreeConstructionResult retireStaleEnvelopeLeaf();
+
+    TreeConstructionResult repairBranchEnvelope();
+
+    TreeConstructionResult buildMinimumCrownShell();
 
     TreeConstructionResult buildBranchFrame();
 
     TreeConstructionResult fillCanopy();
 
-    TreeConstructionResult pruneRetiredCrown();
+    TreeConstructionResult retireDisconnectedEvolvedStructure();
+
+    TreeConstructionResult retireConflictingEvolvedTarget();
+
+    TreeConstructionResult retireObsoleteEvolvedStructure();
+
+    TreeConstructionResult retireSourceCrown();
 
     TreeConstructionResult finalizeTransition();
 

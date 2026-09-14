@@ -2,12 +2,18 @@ package org.evolution.features.treeevolution.constructor.executor;
 
 import java.util.Set;
 import org.evolution.features.treeevolution.constructor.TreeConstructionDecision;
-import org.evolution.features.treeevolution.constructor.TreeConstructionPhase;
+import org.evolution.features.treeevolution.constructor.TreeConstructionSubrule;
+import org.evolution.features.treeevolution.constructor.TreeConstructionAttachment;
 
 public final class DetailConstructionExecutor implements TreeConstructionExecutor {
     @Override
-    public Set<TreeConstructionPhase> phases() {
-        return Set.of(TreeConstructionPhase.BUILD_DETAILS);
+    public Set<TreeConstructionSubrule> subrules() {
+        return Set.of(TreeConstructionSubrule.POST_STRUCTURE_DETAIL);
+    }
+
+    @Override
+    public Set<TreeConstructionAttachment> attachments() {
+        return Set.of(TreeConstructionAttachment.DETAIL_PLANNERS);
     }
 
     @Override

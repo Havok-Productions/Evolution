@@ -25,8 +25,11 @@ final class TreeBranchTipIntegrityPolicy {
 
     static int requiredLeafContacts(
             TreeMaturityStage maturityStage, TreeSpecies species) {
-        // ## One direct anchor proves attachment; the connected envelope enforces visible leaf mass.
-        return 1;
+        // ## Acacia forks need a visible leafy throat, not one coincidental
+        // contact with a broad shelf. Other species retain the general anchor.
+        return species == TreeSpecies.ACACIA
+                ? AcaciaArchitecturePolicy.minimumTipLeafContacts()
+                : 1;
     }
 
     static int requiredClusterLeaves(TreeDna dna) {

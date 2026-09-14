@@ -8,12 +8,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.BiPredicate;
+import java.util.function.Predicate;
+import java.util.function.ToLongFunction;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -42,6 +45,7 @@ final class TreeCandidateDiscoveryService {
     private final Set<Material> naturalGround;
     private final Set<Material> naturalDetails;
     private final BiPredicate<Location, Integer> nearPlayer;
+    private final Predicate<String> playerPlacedTreeWood;
     private final ConcurrentMap<String, CachedTreeCandidate> nearestCache =
             new ConcurrentHashMap<>();
     private final ConcurrentMap<String, CachedKnownCandidates> knownCache =
@@ -53,7 +57,8 @@ final class TreeCandidateDiscoveryService {
             ConcurrentMap<String, TreeDna> treeDna,
             Set<Material> naturalGround,
             Set<Material> naturalDetails,
-            BiPredicate<Location, Integer> nearPlayer
+            BiPredicate<Location, Integer> nearPlayer,
+            Predicate<String> playerPlacedTreeWood
     ) {
         this.plugin = plugin;
         this.diagnostics = diagnostics;
@@ -61,6 +66,7 @@ final class TreeCandidateDiscoveryService {
         this.naturalGround = Set.copyOf(naturalGround);
         this.naturalDetails = Set.copyOf(naturalDetails);
         this.nearPlayer = nearPlayer;
+        this.playerPlacedTreeWood = playerPlacedTreeWood;
     }
 
     Optional<TreeCandidate> findRandom(Location origin, TreeEvolutionConfig config) {
@@ -258,6 +264,88 @@ final class TreeCandidateDiscoveryService {
         return limited;
     }
 
+    List<TreeCandidate> findKnownForObservation(
+            Location origin,
+            TreeEvolutionConfig config,
+            int limit,
+            Predicate<TreeDna> eligible,
+            ToLongFunction<TreeDna> nextObservationMillis
+    ) {
+        if (limit <= 0 || origin.getWorld() == null) {
+            return List.of();
+        }
+        try (ReportSample sample = plugin.resourceReporter().begin(
+                "tree-evolution", "search.clean-tree-observation")) {
+            World world = origin.getWorld();
+            long now = System.currentTimeMillis();
+            long radiusSquared = (long) config.searchRadius()
+                    * config.searchRadius();
+            Comparator<TreeDna> observationPriority = Comparator
+                    .comparingLong(nextObservationMillis)
+                    .thenComparingLong(dna -> {
+                        long dx = (long) dna.baseX()
+                                - origin.getBlockX();
+                        long dz = (long) dna.baseZ()
+                                - origin.getBlockZ();
+                        return (dx * dx) + (dz * dz);
+                    });
+            // ## Retain only the best due candidates. A large saved forest
+            // must not allocate and sort a list containing every nearby tree
+            // merely to observe one of them.
+            PriorityQueue<TreeDna> due = new PriorityQueue<>(
+                    Math.max(1, limit), observationPriority.reversed());
+            int dueNearby = 0;
+            int inspected = 0;
+            for (TreeDna dna : treeDna.values()) {
+                inspected++;
+                if (!world.getUID().equals(dna.worldId())
+                        || !dna.stumpPresent()
+                        || !eligible.test(dna)
+                        || nextObservationMillis.applyAsLong(dna) > now) {
+                    continue;
+                }
+                long dx = (long) dna.baseX() - origin.getBlockX();
+                long dz = (long) dna.baseZ() - origin.getBlockZ();
+                if ((dx * dx) + (dz * dz) > radiusSquared) {
+                    continue;
+                }
+                int chunkX = dna.baseX() >> 4;
+                int chunkZ = dna.baseZ() >> 4;
+                if (!world.isChunkLoaded(chunkX, chunkZ)
+                        || !Bukkit.isOwnedByCurrentRegion(
+                                world, chunkX, chunkZ, 0)) {
+                    continue;
+                }
+                dueNearby++;
+                if (due.size() < limit) {
+                    due.add(dna);
+                } else if (observationPriority.compare(
+                        dna, due.peek()) < 0) {
+                    due.poll();
+                    due.add(dna);
+                }
+            }
+            List<TreeDna> orderedDue = new ArrayList<>(due);
+            orderedDue.sort(observationPriority);
+            List<TreeCandidate> result = new ArrayList<>();
+            for (TreeDna dna : orderedDue) {
+                if (result.size() >= limit) {
+                    break;
+                }
+                buildKnown(world, dna, config)
+                        .filter(candidate -> nearPlayer.test(
+                                candidate.baseLocation(),
+                                config.requiredPlayerDistanceChunks()))
+                        .ifPresent(result::add);
+            }
+            sample.workUnits(inspected)
+                    .changedUnits(result.size())
+                    .detail("known=" + inspected + " due-near="
+                            + dueNearby + " selected=" + result.size());
+            return List.copyOf(result);
+        }
+    }
+
     Optional<TreeCandidate> build(Block start) {
         return build(start, false);
     }
@@ -265,6 +353,10 @@ final class TreeCandidateDiscoveryService {
     Optional<TreeCandidate> build(Block start, boolean thoroughOwnershipScan) {
         Optional<TreeSpecies> species = TreeSpecies.fromMaterial(start.getType());
         if (species.isEmpty() || start.getType() != species.get().logMaterial()) {
+            return Optional.empty();
+        }
+        if (playerPlacedTreeWood.test(keyFor(start))) {
+            tracePlayerWoodRejection(start, "sampled-log");
             return Optional.empty();
         }
         Block base = start;
@@ -285,9 +377,24 @@ final class TreeCandidateDiscoveryService {
                 || !naturalGround.contains(base.getRelative(BlockFace.DOWN).getType())) {
             return Optional.empty();
         }
+        if (playerPlacedTreeWood.test(keyFor(base))) {
+            tracePlayerWoodRejection(base, "base-log");
+            return Optional.empty();
+        }
 
         TreeGroup group = collectGroup(base, species.get(), thoroughOwnershipScan);
         if (group.leaves() < 2) {
+            return Optional.empty();
+        }
+        Optional<String> playerWood = group.keys().stream()
+                .filter(playerPlacedTreeWood)
+                .findFirst();
+        if (playerWood.isPresent()) {
+            plugin.pathDebug().traceSampled(
+                    plugin, "tree-evolution",
+                    "candidate.reject-player-tree-wood",
+                    "base=" + format(base) + " receipt=" + playerWood.get()
+                            + " ## a fresh candidate cannot absorb player-built wood");
             return Optional.empty();
         }
         return Optional.of(new TreeCandidate(
@@ -317,6 +424,14 @@ final class TreeCandidateDiscoveryService {
     void clearSpatialCaches() {
         nearestCache.clear();
         knownCache.clear();
+    }
+
+    private void tracePlayerWoodRejection(Block block, String route) {
+        plugin.pathDebug().traceSampled(
+                plugin, "tree-evolution",
+                "candidate.reject-player-tree-wood",
+                "route=" + route + " block=" + format(block)
+                        + " ## shared placement provenance outranks natural-tree shape");
     }
 
     Optional<TreeCandidate> buildKnown(
@@ -359,6 +474,14 @@ final class TreeCandidateDiscoveryService {
         }
 
         CanopySample canopy = sampleKnownCanopy(world, dna, topY, naturalKeys);
+        TreeKnownOwnershipPolicy.Snapshot persistedOwnership =
+                TreeKnownOwnershipPolicy.snapshot(dna);
+        if (persistedOwnership.complete()) {
+            // ## The immutable ledger is the authority for a known transition.
+            // Re-flooding touching crowns can exhaust the bounded scan forever
+            // and strand a tree with a complete frame but half of its canopy.
+            naturalKeys.addAll(persistedOwnership.ownedKeys());
+        }
         int height = Math.max(1, topY - dna.baseY() + 1);
         int connectedLogs = Math.max(height, logs + canopy.logs());
         int connectedLeaves = Math.max(canopy.leaves(), 2);
@@ -371,6 +494,9 @@ final class TreeCandidateDiscoveryService {
                         + " logs=" + connectedLogs
                         + " leaves=" + connectedLeaves
                         + " keys=" + naturalKeys.size()
+                        + " ownership="
+                        + (persistedOwnership.complete()
+                                ? "persisted-ledger" : "fresh-scan-required")
                         + " ## known DNA candidate used compact validation instead of full tree flood-fill");
         return Optional.of(new TreeCandidate(
                 world,
@@ -383,7 +509,7 @@ final class TreeCandidateDiscoveryService {
                 connectedLogs,
                 connectedLeaves,
                 naturalKeys,
-                false));
+                persistedOwnership.complete()));
     }
 
     private int countKnownTrunkBlocksAt(

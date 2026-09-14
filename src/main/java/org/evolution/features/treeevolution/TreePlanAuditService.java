@@ -1,6 +1,8 @@
 package org.evolution.features.treeevolution;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -19,6 +21,7 @@ import org.bukkit.block.BlockFace;
 import org.bukkit.block.Biome;
 import org.bukkit.block.data.type.Leaves;
 import org.evolution.coreparts.EvolutionPlugin;
+import org.evolution.coreparts.ResourceReporter.ReportSample;
 
 /**
  * ## Owns immutable target plans, completion projection, and terminal audits.
@@ -35,6 +38,8 @@ final class TreePlanAuditService {
     private final TreeEvolutionDiagnostics diagnostics;
     private final AtomicLong changedBlocks;
     private final Supplier<TreeEvolutionConfig> configSupplier;
+    private final TreeLeafOwnershipIndex leafOwnershipIndex;
+    private final TreeStaleEnvelopeAuditService staleEnvelopeAudits;
     private final TreeEvolutionPlanner planner = new TreeEvolutionPlanner();
     private final ConcurrentMap<String, CachedTreePlan> planCache = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, CachedProjectionProgress> projectionProgressCache = new ConcurrentHashMap<>();
@@ -44,24 +49,30 @@ final class TreePlanAuditService {
             EvolutionPlugin plugin,
             TreeEvolutionDiagnostics diagnostics,
             AtomicLong changedBlocks,
-            Supplier<TreeEvolutionConfig> configSupplier
+            Supplier<TreeEvolutionConfig> configSupplier,
+            TreeLeafOwnershipIndex leafOwnershipIndex
     ) {
         this.plugin = plugin;
         this.diagnostics = diagnostics;
         this.changedBlocks = changedBlocks;
         this.configSupplier = configSupplier;
+        this.leafOwnershipIndex = leafOwnershipIndex;
+        this.staleEnvelopeAudits = new TreeStaleEnvelopeAuditService(
+                leafOwnershipIndex);
     }
 
     void invalidate(String treeKey) {
         planCache.remove(treeKey);
         projectionProgressCache.remove(treeKey);
         liveTerminalAuditCache.remove(treeKey);
+        staleEnvelopeAudits.invalidate(treeKey);
     }
 
     void clear() {
         planCache.clear();
         projectionProgressCache.clear();
         liveTerminalAuditCache.clear();
+        staleEnvelopeAudits.clear();
     }
 
     void invalidateLiveAnalysis(String treeKey) {
@@ -139,41 +150,89 @@ final class TreePlanAuditService {
     }
     int exposedUpperLogCount(TreeCandidate candidate, TreeDna dna,
             Map<String, PlannedTreeBlock> blocksByKey) {
+        return exposedUpperSupport(candidate, dna, blocksByKey).count();
+    }
+
+    Optional<Block> firstExposedUpperLog(
+            TreeCandidate candidate,
+            TreeDna dna,
+            Map<String, PlannedTreeBlock> blocksByKey
+    ) {
+        return exposedUpperSupport(candidate, dna, blocksByKey).first();
+    }
+
+    private ExposedSupportAudit exposedUpperSupport(
+            TreeCandidate candidate,
+            TreeDna dna,
+            Map<String, PlannedTreeBlock> blocksByKey
+    ) {
         World world = candidate.world();
-        int liveHeight = liveTrunkHeight(world, dna);
-        int liveTop = dna.baseY() + liveHeight - 1;
-        if (liveHeight < 3) {
-            return 0;
+        int liveTop = blocksByKey.values().stream()
+                .filter(block -> block.role() == TreeBlockRole.TRUNK)
+                .filter(block -> {
+                    Block live = world.getBlockAt(
+                            block.x(), block.y(), block.z());
+                    return live.getType() == dna.species().logMaterial()
+                            && dna.countsAsOwnedLog(keyFor(live));
+                })
+                .mapToInt(PlannedTreeBlock::y)
+                .max()
+                .orElse(dna.baseY() - 1);
+        if (liveTop < dna.baseY() + 2) {
+            return ExposedSupportAudit.empty();
         }
         int startY = Math.max(dna.baseY(), liveTop - 3);
-        int exposed = 0;
-        for (int y = liveTop; y >= startY; y--) {
-            int width = TreeSpeciesStageStyle.trunkWidthAt(dna, y);
-            int radius = Math.max(0, width / 2);
-            int centerX = dna.trunkXAt(y);
-            int centerZ = dna.trunkZAt(y);
-            for (int x = -radius; x <= radius; x++) {
-                for (int z = -radius; z <= radius; z++) {
-                    Block block = world.getBlockAt(centerX + x, y, centerZ + z);
-                    if (block.getType() == dna.species().logMaterial()
-                            && TreeCanopyIntegrityPolicy.requiresCanopyCover(
-                                    block.getX(), block.getY(), block.getZ(),
-                                    dna.species().leafMaterial(), blocksByKey)
-                            && adjacentPlannedLeafContacts(
-                                    world, dna, block,
-                                    dna.species().leafMaterial(),
-                                    blocksByKey) == 0) {
-                        exposed++;
-                    }
-                }
+        List<Block> exposed = new ArrayList<>();
+        for (PlannedTreeBlock plannedBlock : blocksByKey.values()) {
+            if (plannedBlock.role() != TreeBlockRole.TRUNK
+                    || plannedBlock.y() < startY
+                    || plannedBlock.y() > liveTop) {
+                continue;
+            }
+            Block block = world.getBlockAt(
+                    plannedBlock.x(), plannedBlock.y(), plannedBlock.z());
+            if (block.getType() == dna.species().logMaterial()
+                    && dna.countsAsOwnedLog(keyFor(block))
+                    && TreeCanopyIntegrityPolicy.requiresCanopyCover(
+                            block.getX(), block.getY(), block.getZ(),
+                            dna.species().leafMaterial(), blocksByKey,
+                            planned -> {
+                                Block cover = world.getBlockAt(
+                                        planned.x(), planned.y(),
+                                        planned.z());
+                                return !isWoodMaterial(cover.getType())
+                                        || dna.countsAsOwnedLog(
+                                                keyFor(cover));
+                            })
+                    && adjacentPlannedLeafContacts(
+                            world, dna, block,
+                            dna.species().leafMaterial(),
+                            blocksByKey) == 0) {
+                exposed.add(block);
             }
         }
-        if (exposed > 0) {
+        exposed.sort(Comparator
+                .comparingInt(Block::getY).reversed()
+                .thenComparingInt(Block::getX)
+                .thenComparingInt(Block::getZ));
+        if (!exposed.isEmpty()) {
             plugin.pathDebug().traceSampled(plugin, "tree-evolution", "shape.integrity.exposed-upper-logs",
-                    "tree=" + dna.key() + " exposed=" + exposed + " live-top=" + liveTop
-                            + " ## upper logs remain exposed until an evolution-owned planned leaf reforms their canopy cover");
+                    "tree=" + dna.key() + " exposed=" + exposed.size()
+                            + " first=" + format(exposed.getFirst())
+                            + " live-top=" + liveTop
+                            + " ## hierarchy and executor share this exact blueprint-derived support target");
         }
-        return exposed;
+        return new ExposedSupportAudit(
+                exposed.size(), exposed.stream().findFirst());
+    }
+
+    private record ExposedSupportAudit(
+            int count,
+            Optional<Block> first
+    ) {
+        private static ExposedSupportAudit empty() {
+            return new ExposedSupportAudit(0, Optional.empty());
+        }
     }
 
     BranchTipCoverage branchTipCoverage(
@@ -196,7 +255,8 @@ final class TreePlanAuditService {
                 continue;
             }
             Block tipBlock = world.getBlockAt(tip.x(), tip.y(), tip.z());
-            if (tipBlock.getType() != dna.species().logMaterial()) {
+            if (tipBlock.getType() != dna.species().logMaterial()
+                    || !dna.countsAsOwnedLog(keyFor(tipBlock))) {
                 continue;
             }
             int requiredContacts = TreeBranchTipIntegrityPolicy.targetLeafContacts(
@@ -232,8 +292,63 @@ final class TreePlanAuditService {
             }
         }
 
+        int undercoveredBranchSegments = 0;
+        Set<String> visitedIntegratedSegments = new HashSet<>();
+        for (TreeBranchPlan branch : cachedPlan.plan().branchPlans()) {
+            for (TreeBranchPlan.BranchSegment segment
+                    : branch.segments()) {
+                String key = segment.x() + ":" + segment.y()
+                        + ":" + segment.z();
+                if (visitedTips.contains(key)
+                        || !visitedIntegratedSegments.add(key)
+                        || !TreeBranchCanopyIntegrationPolicy
+                                .requiresCover(branch, segment)
+                        || !isReadableTreeCoordinate(
+                                world, segment.x(), segment.z())) {
+                    continue;
+                }
+                Block support = world.getBlockAt(
+                        segment.x(), segment.y(), segment.z());
+                if (support.getType()
+                                != dna.species().logMaterial()
+                        || !dna.countsAsOwnedLog(keyFor(support))) {
+                    continue;
+                }
+                int requiredContacts =
+                        TreeBranchCanopyIntegrationPolicy
+                                .targetDirectContacts(
+                                        dna,
+                                        segment.x(), segment.y(),
+                                        segment.z(),
+                                        cachedPlan.blocksByKey());
+                if (requiredContacts <= 0) {
+                    continue;
+                }
+                int currentContacts = adjacentPlannedLeafContacts(
+                        world, dna, support,
+                        dna.species().leafMaterial(),
+                        cachedPlan.blocksByKey());
+                if (currentContacts >= requiredContacts) {
+                    continue;
+                }
+                undercoveredBranchSegments++;
+                if (firstUncovered == null) {
+                    firstUncovered = support;
+                    firstCurrentContacts = currentContacts;
+                    firstRequiredContacts = requiredContacts;
+                    firstCurrentCluster = plannedEnvelopeLiveLeaves(
+                            world, dna, support,
+                            dna.species().leafMaterial(),
+                            cachedPlan.blocksByKey());
+                    firstRequiredCluster = 0;
+                    firstNaturalVolume = true;
+                }
+            }
+        }
+
         LiveTerminalAudit liveAudit = liveTerminalAudit(candidate, dna, cachedPlan);
         int totalUncovered = uncoveredPlannedTips
+                + undercoveredBranchSegments
                 + liveAudit.unplannedBareTips()
                 + liveAudit.stalePersistentEnvelopeLeaves();
         if (totalUncovered > 0) {
@@ -247,6 +362,8 @@ final class TreePlanAuditService {
                     "tree=" + dna.key()
                             + " live-planned-tips=" + liveTips
                             + " uncovered-planned=" + uncoveredPlannedTips
+                            + " undercovered-branch-segments="
+                            + undercoveredBranchSegments
                             + " unplanned-bare-terminals=" + liveAudit.unplannedBareTips()
                             + " stale-persistent-envelope-leaves="
                             + liveAudit.stalePersistentEnvelopeLeaves()
@@ -254,8 +371,9 @@ final class TreePlanAuditService {
                             + " contacts=" + firstCurrentContacts + "/" + firstRequiredContacts
                             + " envelope=" + firstCurrentCluster + "/" + firstRequiredCluster
                             + " natural-volume=" + firstNaturalVolume
-                            + " ## actual terminal logs are audited alongside planned tips so stale protrusions cannot hide outside the target plan");
-            if (uncoveredPlannedTips > 0) {
+                            + " ## terminal tips, distal branch integration, and stale live protrusions share one universal owned-canopy contract");
+            if (uncoveredPlannedTips > 0
+                    || undercoveredBranchSegments > 0) {
                 plugin.pathDebug().traceSampled(plugin, "tree-evolution",
                         "audit.branch-envelope-ownership-failed",
                         "tree=" + dna.key()
@@ -266,7 +384,7 @@ final class TreePlanAuditService {
                                 + " ownership-version=" + dna.evolutionOwnershipVersion()
                                 + " evolved-leaves=" + dna.evolvedLeafCount()
                                 + " ownership-required=" + dna.requiresEvolvedLeafOwnership()
-                                + " ## original/preexisting leaves do not satisfy a terminal branch until the current tree evolution explicitly reforms and records them");
+                                + " ## original/preexisting leaves do not satisfy a terminal or distal branch until the current tree evolution explicitly reforms and records them");
             }
         }
         return new BranchTipCoverage(
@@ -338,13 +456,37 @@ final class TreePlanAuditService {
                 firstUnplannedBareTip = block;
             }
         }
-        StaleEnvelopeLeafAudit staleLeafAudit = staleEnvelopeLeafAudit(
-                candidate, dna, cachedPlan);
+        TreeStaleEnvelopeAuditService.Audit staleLeafAudit;
+        try (ReportSample sample = plugin.resourceReporter().begin(
+                "tree-evolution", "audit.stale-envelope.incremental")) {
+            staleLeafAudit = staleEnvelopeAudits.audit(
+                    candidate, dna, cachedPlan);
+            sample.workUnits(staleLeafAudit.inspected())
+                    .detail("tree=" + dna.key()
+                            + " inspected=" + staleLeafAudit.inspected()
+                            + "/" + staleLeafAudit.total()
+                            + " complete=" + staleLeafAudit.complete()
+                            + " indexed-trees="
+                            + leafOwnershipIndex.indexedTreeCount()
+                            + " indexed-blocks="
+                            + leafOwnershipIndex.indexedBlockCount());
+        }
+        if (!staleLeafAudit.complete()) {
+            plugin.pathDebug().traceSampled(
+                    plugin, "tree-evolution",
+                    "audit.stale-envelope.resume",
+                    "tree=" + dna.key() + " inspected="
+                            + staleLeafAudit.inspected() + "/"
+                            + staleLeafAudit.total()
+                            + " ## bounded audit cursor resumes on a later region pass");
+        }
         LiveTerminalAudit audit = new LiveTerminalAudit(
                 unplannedBareTips, firstUnplannedBareTip,
                 staleLeafAudit.count(), staleLeafAudit.first());
-        liveTerminalAuditCache.put(dna.key(), new CachedLiveTerminalAudit(
-                cachedPlan.signature(), audit, now + 750L));
+        if (staleLeafAudit.complete()) {
+            liveTerminalAuditCache.put(dna.key(), new CachedLiveTerminalAudit(
+                    cachedPlan.signature(), audit, now + 750L));
+        }
         if (unplannedBareTips > 0) {
             plugin.pathDebug().traceSampled(plugin, "tree-evolution",
                     "shape.integrity.unplanned-bare-terminal",
@@ -364,51 +506,6 @@ final class TreePlanAuditService {
         return audit;
     }
 
-    private StaleEnvelopeLeafAudit staleEnvelopeLeafAudit(
-            TreeCandidate candidate, TreeDna dna, CachedTreePlan cachedPlan) {
-        Set<String> visited = new HashSet<>();
-        int count = 0;
-        Block first = null;
-        for (TreeBranchPlan.BranchTip tip
-                : cachedPlan.plan().branchEnvelopeCleanupTips()) {
-            for (int dx = -2; dx <= 2; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dz = -2; dz <= 2; dz++) {
-                        int x = tip.x() + dx;
-                        int y = tip.y() + dy;
-                        int z = tip.z() + dz;
-                        String coordinateKey = x + ":" + y + ":" + z;
-                        if (!visited.add(coordinateKey)
-                                || !isReadableTreeCoordinate(
-                                        candidate.world(), x, z)) {
-                            continue;
-                        }
-                        Block leaf = candidate.world().getBlockAt(x, y, z);
-                        if (leaf.getType() != dna.species().leafMaterial()
-                                || !candidate.naturalKeys().contains(keyFor(leaf))
-                                || !(leaf.getBlockData() instanceof Leaves leaves)
-                                || !leaves.isPersistent()) {
-                            continue;
-                        }
-                        PlannedTreeBlock planned = cachedPlan.blocksByKey().get(
-                                coordinateKey);
-                        if (planned != null
-                                && planned.role() == TreeBlockRole.CANOPY
-                                && planned.material()
-                                        == dna.species().leafMaterial()) {
-                            continue;
-                        }
-                        count++;
-                        if (first == null) {
-                            first = leaf;
-                        }
-                    }
-                }
-            }
-        }
-        return new StaleEnvelopeLeafAudit(count, first);
-    }
-
     private int sameSpeciesWoodNeighbors(Block block, TreeDna dna) {
         int neighbors = 0;
         for (BlockFace face : NEIGHBORS) {
@@ -417,6 +514,107 @@ final class TreePlanAuditService {
             }
         }
         return neighbors;
+    }
+
+    private boolean terminalRetirementPreservesCurrentTarget(
+            TreeCandidate candidate,
+            TreeDna dna,
+            String retiringWorldKey
+    ) {
+        Set<String> liveOwnedWood = new HashSet<>();
+        Set<String> receipts = new HashSet<>(dna.originalShapeLogs());
+        receipts.addAll(dna.evolvedShapeLogs());
+        for (String receipt : receipts) {
+            Optional<Block> live = blockFromKey(
+                    candidate.world(), receipt);
+            if (live.isEmpty()
+                    || live.get().getType()
+                            != dna.species().logMaterial()) {
+                continue;
+            }
+            liveOwnedWood.add(receipt);
+        }
+        TreeConstructionMutationPolicy.Retirement retirement =
+                TreeConstructionMutationPolicy.rootedTargetRetirement(
+                        dna, liveOwnedWood, retiringWorldKey);
+        if (!retirement.allowed()) {
+            plugin.pathDebug().traceSampled(
+                    plugin, "tree-evolution",
+                    "gate.terminal-current-target-dependency",
+                    "tree=" + dna.key() + " terminal="
+                            + coordinateKey(retiringWorldKey)
+                            + " policy=" + retirement.reason()
+                            + " ## alternate planned support must grow before this stale terminal can retire");
+        }
+        return retirement.allowed();
+    }
+
+    TreeConstructionMutationPolicy.TargetRetirement
+            terminalRetirementPlan(
+                    TreeCandidate candidate,
+                    TreeDna dna,
+                    CachedTreePlan cachedPlan,
+                    Block terminal
+            ) {
+        Set<String> liveOwnedWood = new HashSet<>();
+        Set<String> livePlannedWood = new HashSet<>();
+        Set<String> currentTargetWood = new HashSet<>();
+        Set<String> evolvedWood = new HashSet<>();
+        Set<String> evolvedCanopy = new HashSet<>();
+        Set<String> receipts = new HashSet<>(dna.originalShapeLogs());
+        receipts.addAll(dna.evolvedShapeLogs());
+        for (String receipt : receipts) {
+            Optional<Block> live = blockFromKey(
+                    candidate.world(), receipt);
+            if (live.isEmpty()
+                    || live.get().getType()
+                            != dna.species().logMaterial()) {
+                continue;
+            }
+            liveOwnedWood.add(receipt);
+            if (dna.evolvedShapeLogs().contains(receipt)) {
+                evolvedWood.add(receipt);
+            }
+            PlannedTreeBlock planned = cachedPlan.blocksByKey().get(
+                    coordinateKey(receipt));
+            if (planned != null
+                    && (planned.role() == TreeBlockRole.TRUNK
+                        || planned.role() == TreeBlockRole.BRANCH
+                        || planned.role() == TreeBlockRole.ROOT)) {
+                currentTargetWood.add(receipt);
+            }
+        }
+        for (String receipt : dna.evolvedShapeLeaves()) {
+            Optional<Block> live = blockFromKey(
+                    candidate.world(), receipt);
+            if (live.isPresent()
+                    && live.get().getType()
+                            == dna.species().leafMaterial()) {
+                evolvedCanopy.add(receipt);
+                PlannedTreeBlock planned = cachedPlan.blocksByKey().get(
+                        coordinateKey(receipt));
+                if (planned != null
+                        && planned.role() == TreeBlockRole.CANOPY) {
+                    currentTargetWood.add(receipt);
+                }
+            }
+        }
+        for (PlannedTreeBlock planned : cachedPlan.orderedBlocks()) {
+            if (planned.role() != TreeBlockRole.TRUNK
+                    && planned.role() != TreeBlockRole.BRANCH
+                    && planned.role() != TreeBlockRole.ROOT) {
+                continue;
+            }
+            Block live = candidate.world().getBlockAt(
+                    planned.x(), planned.y(), planned.z());
+            if (live.getType() == planned.material()) {
+                livePlannedWood.add(keyFor(live));
+            }
+        }
+        return TreeConstructionMutationPolicy.targetRetirement(
+                dna, cachedPlan, liveOwnedWood,
+                evolvedWood, evolvedCanopy, livePlannedWood,
+                currentTargetWood, Set.of(), keyFor(terminal));
     }
 
 
@@ -429,6 +627,20 @@ final class TreePlanAuditService {
                 || !candidate.naturalKeys().contains(keyFor(leaf))
                 || !(leaf.getBlockData() instanceof Leaves leaves)
                 || !leaves.isPersistent()) {
+            return false;
+        }
+        String leafKey = keyFor(leaf);
+        TreeStaleEnvelopeOwnershipPolicy.Decision ownership =
+                leafOwnershipIndex.classify(dna, leafKey);
+        if (ownership
+                != TreeStaleEnvelopeOwnershipPolicy.Decision
+                        .RETIRE_EXCLUSIVE_EVOLVED_LEAF) {
+            plugin.pathDebug().traceSampled(
+                    plugin, "tree-evolution",
+                    "gate.stale-envelope-ownership",
+                    "tree=" + dna.key() + " leaf=" + format(leaf)
+                            + " decision=" + ownership
+                            + " ## touching crowns do not share destructive ownership");
             return false;
         }
         PlannedTreeBlock planned = cachedPlan.blocksByKey().get(
@@ -450,14 +662,33 @@ final class TreePlanAuditService {
                     currentConfig, "stale-envelope-leaf-safety", format(leaf));
             return false;
         }
+        if (!dna.forgetEvolvedLeaf(leafKey)) {
+            // ## Claim the receipt before changing the world. If another
+            // scheduler path already retired it, this path must not delete
+            // whatever now occupies the shared crown coordinate.
+            plugin.pathDebug().traceSampled(
+                    plugin, "tree-evolution",
+                    "gate.stale-envelope-receipt-lost",
+                    "tree=" + dna.key() + " leaf=" + format(leaf));
+            return false;
+        }
+        Material previousMaterial = leaf.getType();
         leaf.setType(Material.AIR, false);
+        staleEnvelopeAudits.forget(dna.key(), leafKey);
         changedBlocks.incrementAndGet();
         liveTerminalAuditCache.remove(dna.key());
         projectionProgressCache.remove(dna.key());
+        diagnostics.recordRemoved(
+                plugin, currentConfig, dna, leaf, previousMaterial,
+                TreeBlockRole.CANOPY, TreePlacementAugment.UNCLASSIFIED,
+                org.evolution.features.treeevolution.constructor
+                        .TreeConstructionSubrule
+                        .STALE_ENVELOPE_LEAF_RETIREMENT,
+                "stale-persistent-envelope-leaf");
         plugin.pathDebug().trace(plugin, "tree-evolution",
                 "prune.stale-persistent-envelope-leaf",
                 "tree=" + dna.key() + " removed=" + format(leaf)
-                        + " ## legacy forced-envelope leaf was outside the natural deterministic canopy target");
+                        + " receipt-retired=true ## exclusive legacy envelope leaf was outside the deterministic canopy target");
         return true;
     }
 
@@ -484,6 +715,10 @@ final class TreePlanAuditService {
                 != TreeLiveTerminalPolicy.Decision.PRUNE_UNPLANNED_BARE_TERMINAL) {
             return false;
         }
+        if (!terminalRetirementPreservesCurrentTarget(
+                candidate, dna, keyFor(tip))) {
+            return false;
+        }
         int chunkX = tip.getX() >> 4;
         int chunkZ = tip.getZ() >> 4;
         if (!tip.getWorld().isChunkLoaded(chunkX, chunkZ)
@@ -496,11 +731,21 @@ final class TreePlanAuditService {
             return false;
         }
         String retiredKey = keyFor(tip);
+        Material previousMaterial = tip.getType();
         tip.setType(Material.AIR, false);
         changedBlocks.incrementAndGet();
         dna.forgetEvolvedLog(retiredKey);
         liveTerminalAuditCache.remove(dna.key());
         projectionProgressCache.remove(dna.key());
+        diagnostics.recordRemoved(
+                plugin, currentConfig, dna, tip, previousMaterial,
+                TreeBlockRole.BRANCH,
+                planned == null ? TreePlacementAugment.UNCLASSIFIED
+                        : planned.augment(),
+                org.evolution.features.treeevolution.constructor
+                        .TreeConstructionSubrule
+                        .UNPLANNED_BARE_TERMINAL_RETIREMENT,
+                "unplanned-bare-terminal");
         plugin.pathDebug().trace(plugin, "tree-evolution",
                 "prune.unplanned-bare-terminal",
                 "tree=" + dna.key() + " removed=" + format(tip)
@@ -629,6 +874,8 @@ final class TreePlanAuditService {
         int branchPlaced = 0;
         int canopyTotal = 0;
         int canopyPlaced = 0;
+        int immutableWoodObstacles = 0;
+        String firstImmutableWoodObstacle = null;
         Map<Long, Boolean> readableChunks = new HashMap<>();
         for (PlannedTreeBlock block : orderedBlocks) {
             if (block.role() != TreeBlockRole.TRUNK
@@ -651,14 +898,24 @@ final class TreePlanAuditService {
                     ? Material.AIR : liveBlock.getType();
             BlockProvenance provenance = BlockProvenance.classify(
                     configSupplier.get(), dna, block, live, true, readable);
-            boolean foreignWoodObstacle = readable
+            boolean structuralForeignWoodObstacle = readable
                     && liveBlock != null
                     && isStructuralWoodRole(block.role())
                     && isCompatibleOrganicOccupant(block.role(), live)
                     && !dna.countsAsOwnedLog(keyFor(liveBlock));
-            if (foreignWoodObstacle) {
-                // ## Neighboring wood is an immutable obstacle. It is excluded
-                // from this target's completion denominator and never claimed.
+            boolean canopyWoodObstacle = readable
+                    && liveBlock != null
+                    && block.role() == TreeBlockRole.CANOPY
+                    && isWoodMaterial(live);
+            if (structuralForeignWoodObstacle || canopyWoodObstacle) {
+                immutableWoodObstacles++;
+                if (firstImmutableWoodObstacle == null) {
+                    firstImmutableWoodObstacle = block.key()
+                            + "=" + live;
+                }
+                // ## Neighboring wood is an immutable obstacle. Both the
+                // placement gate and completion denominator must route around
+                // it, otherwise a protected overlap can stall forever.
                 continue;
             }
             if (readable && (provenance == BlockProvenance.LIQUID
@@ -694,6 +951,15 @@ final class TreePlanAuditService {
                 break;
             }
         }
+        if (immutableWoodObstacles > 0) {
+            plugin.pathDebug().traceSampled(
+                    plugin, "tree-evolution",
+                    "gate.target-foreign-wood-excluded",
+                    "tree=" + dna.key()
+                            + " count=" + immutableWoodObstacles
+                            + " first=" + firstImmutableWoodObstacle
+                            + " ## protected neighboring wood is outside this tree's effective target");
+        }
         return new TreeProjectionProgress(
                 trunkPlaced, trunkTotal,
                 branchPlaced, branchTotal,
@@ -726,6 +992,15 @@ final class TreePlanAuditService {
         return role == TreeBlockRole.TRUNK
                 || role == TreeBlockRole.BRANCH
                 || role == TreeBlockRole.ROOT;
+    }
+
+    private boolean isWoodMaterial(Material material) {
+        return material.name().endsWith("_LOG")
+                || material.name().endsWith("_WOOD")
+                || material.name().endsWith("_STEM")
+                || material.name().endsWith("_HYPHAE")
+                || material == Material.MANGROVE_ROOTS
+                || material == Material.MUDDY_MANGROVE_ROOTS;
     }
 
     private boolean isCompatibleOrganicOccupant(
@@ -825,12 +1100,25 @@ final class TreePlanAuditService {
         }
     }
 
+    private String coordinateKey(String worldKey) {
+        String[] parts = worldKey.split(":");
+        if (parts.length < 4) {
+            return worldKey;
+        }
+        return parts[parts.length - 3] + ":"
+                + parts[parts.length - 2] + ":"
+                + parts[parts.length - 1];
+    }
+
     private static String keyFor(Block block) {
         return block.getWorld().getUID() + ":" + block.getX() + ":"
                 + block.getY() + ":" + block.getZ();
     }
 
     private String format(Block block) {
+        if (block == null) {
+            return "pending-incremental-audit";
+        }
         return block.getWorld().getName() + " " + block.getX() + ","
                 + block.getY() + "," + block.getZ();
     }
@@ -852,6 +1140,4 @@ final class TreePlanAuditService {
                 new LiveTerminalAudit(0, null, 0, null);
     }
 
-    private record StaleEnvelopeLeafAudit(int count, Block first) {
-    }
 }

@@ -47,16 +47,13 @@ public final class TravelingWaveLakeSmokeTest {
         int stateMerges = 0;
         int maximumReplenishment = 0;
         Set<Long> mergedResultIds = new HashSet<>();
-        boolean sawResultantFront = false;
         boolean sawChannelLock = false;
         int openWaterFanStarts = 0;
-        double smallestFanScale = 1.0D;
-        double largestFanScale = 0.0D;
-        Set<Integer> fanAngleBuckets = new HashSet<>();
+        double maximumHalfWidth = 0.0D;
         for (long tick = 0L; tick <= 500L; tick += 5L) {
             TravelingWaveRegistry.Update update = registry.update(
                     playerId, worldId, 0, 0, tick, profile, OvalWaveSettings.defaults(),
-                    1.0D, 0.0D, gridRadius, gridRadius + 8, 3, topology);
+                    1.0D, 0.0D, gridRadius, gridRadius + 8, 1, 1, topology);
             if (tick > 0L) {
                 maximumReplenishment = Math.max(maximumReplenishment,
                         update.lifecycle().spawnedIds().size());
@@ -68,15 +65,14 @@ public final class TravelingWaveLakeSmokeTest {
                                 && !mergedResultIds.contains(Long.parseLong(parents[1])),
                         "a merged result must not participate in another merge");
                 mergedResultIds.add(Long.parseLong(sides[1]));
-            }            for (String transition : update.lifecycle().steeringTransitions()) {
+            }
+            for (String transition : update.lifecycle().steeringTransitions()) {
                 openWaterFanStarts += transition.startsWith("[SOURCE][OPEN-WATER-FAN]")
                         ? 1 : 0;
             }
             moved += update.movedBlocks();
             impacts += update.shoreImpacts();
             stateMerges += update.mergedFronts();
-            sawResultantFront |= update.fronts().stream().anyMatch(front ->
-                    front.kind() == TravelingWaveFront.Kind.MERGED);
             sawChannelLock |= update.fronts().stream().anyMatch(
                     TravelingWaveFront::channelCourseLocked);
             guidedFrames += update.shoreGuidedFronts() > 0 ? 1 : 0;
@@ -100,17 +96,8 @@ public final class TravelingWaveLakeSmokeTest {
                 maximumCollisionCells = Math.max(maximumCollisionCells, collisionCells);
             }
             for (TravelingWaveFront front : update.fronts()) {
-                if (front.openWaterFan()) {
-                    double scale = front.halfWidth()
-                            / Math.max(0.001D, front.openWaterTargetHalfWidth());
-                    largestFanScale = Math.max(largestFanScale, scale);
-                    if (tick == 0L) {
-                        smallestFanScale = Math.min(smallestFanScale, scale);
-                        fanAngleBuckets.add((int) Math.round(
-                                Math.toDegrees(Math.atan2(
-                                        front.headingZ(), front.headingX())) / 5.0D));
-                    }
-                }
+                maximumHalfWidth = Math.max(
+                        maximumHalfWidth, front.halfWidth());
                 require(topology.isWater((int) Math.round(front.x()),
                                 (int) Math.round(front.z())),
                         "front centers must stop before crossing onto land: tick=" + tick
@@ -120,25 +107,22 @@ public final class TravelingWaveLakeSmokeTest {
             }
         }
 
-        require(active >= 4, "the lake must contain several coherent fronts");
-        require(active <= 4,
-                "open-water angle fans must not increase the bounded front count");
-        require(openWaterFanStarts >= 4,
-                "the large-water source must emit small angle-varied fan fronts");
-        require(smallestFanScale <= 0.52D
-                        && largestFanScale >= smallestFanScale + 0.15D,
-                "open-water fronts must start small and widen through travel");
-        require(fanAngleBuckets.size() >= 2,
-                "the initial open-water fan must contain multiple stable angles");
+        require(active == 1,
+                "the complete player view must contain exactly one wave");
+        require(openWaterFanStarts == 0,
+                "an enclosed lake must not emit ocean-scale angle fans");
+        require(maximumHalfWidth <= 15.01D,
+                "an enclosed lake must keep its fronts within the lake-size cap");
         require(maximumReplenishment <= 1,
                 "missing fronts must replenish gradually, one per interval");
-        require(stateMerges <= 10,
-                "merge cooldown must prevent collision cascades");
+        require(stateMerges == 0 && maximumCollisionCells == 0,
+                "one-wave mode must not retain hidden same-source collisions");
         require(moved > 80.0D, "front centers must visibly travel across the lake");
         require(guidedFrames > 20, "fronts must spend time guided toward the shoreline");
         require(impacts > 0, "at least one persistent front must reach and fizzle at shore");
-        require(crossingFronts > 0 && giantFronts > 0,
-                "the live set must include crossing and giant front types");
+        require(crossingFronts <= 1,
+                "one-wave mode may expose at most one crossing front");
+        require(giantFronts == 0, "giant fronts are reserved for open coasts");
         // ## Small angle-fan fronts may remain separate for their full lake crossing.
         // Merge behavior is opportunistic here, not a required lifecycle step.
         require(!sawChannelLock,
@@ -151,9 +135,8 @@ public final class TravelingWaveLakeSmokeTest {
                 + " collision-cells=" + maximumCollisionCells
                 + " max-replenishment=" + maximumReplenishment
                 + " visible-budget=" + maximumVisibleCells
-                + " fan-angles=" + fanAngleBuckets.size()
-                + " fan-scale=" + round(smallestFanScale)
-                + "->" + round(largestFanScale));
+                + " max-half-width=" + round(maximumHalfWidth)
+                + " giant-fronts=" + giantFronts);
     }
 
     private static double round(double value) {

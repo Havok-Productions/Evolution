@@ -23,9 +23,12 @@ public final class ResourceReporter {
     private final ConcurrentMap<String, TaskStats> taskStats = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ModuleStats> moduleStats = new ConcurrentHashMap<>();
     private final AtomicBoolean saveRunning = new AtomicBoolean();
+    private final AtomicBoolean saveDirty = new AtomicBoolean();
     private final AtomicLong nextSaveMillis = new AtomicLong();
     private final Deque<String> recentEvents = new ArrayDeque<>();
     private final Deque<String> slowSamples = new ArrayDeque<>();
+    private final ThreadLocal<Deque<ReportSample>> activeSamples =
+            ThreadLocal.withInitial(ArrayDeque::new);
     private final String sessionStartedAt = Instant.now().toString();
     private volatile ResourceReporterConfig config;
 
@@ -44,6 +47,7 @@ public final class ResourceReporter {
             slowSamples.clear();
         }
         nextSaveMillis.set(0L);
+        saveDirty.set(false);
         save(plugin);
     }
 
@@ -57,7 +61,10 @@ public final class ResourceReporter {
         if (!currentConfig.enabled()) {
             return ReportSample.disabled();
         }
-        return new ReportSample(this, module, task, System.nanoTime());
+        ReportSample sample = new ReportSample(
+                this, module, task, System.nanoTime());
+        activeSamples.get().addLast(sample);
+        return sample;
     }
 
     public void count(EvolutionPlugin plugin, String module, String task, long workUnits, long changedUnits, String detail) {
@@ -65,10 +72,12 @@ public final class ResourceReporter {
         if (!currentConfig.enabled()) {
             return;
         }
-        record(plugin, currentConfig, module, task, 0L, workUnits, changedUnits, detail);
+        record(plugin, currentConfig, module, task,
+                0L, 0L, workUnits, changedUnits, detail);
     }
 
     void saveNow(EvolutionPlugin plugin) {
+        saveDirty.set(false);
         save(plugin);
     }
 
@@ -78,14 +87,17 @@ public final class ResourceReporter {
             String module,
             String task,
             long elapsedNanos,
+            long exclusiveNanos,
             long workUnits,
             long changedUnits,
             String detail
     ) {
         String path = module + "." + task;
         TaskStats stats = taskStats.computeIfAbsent(path, key -> new TaskStats(module, task));
-        long runs = stats.record(elapsedNanos, workUnits, changedUnits);
-        moduleStats.computeIfAbsent(module, ModuleStats::new).record(elapsedNanos, workUnits, changedUnits);
+        long runs = stats.record(
+                elapsedNanos, exclusiveNanos, workUnits, changedUnits);
+        moduleStats.computeIfAbsent(module, ModuleStats::new).record(
+                elapsedNanos, exclusiveNanos, workUnits, changedUnits);
 
         boolean slow = elapsedNanos >= currentConfig.slowSampleMillis() * 1_000_000L;
         if (slow) {
@@ -98,6 +110,7 @@ public final class ResourceReporter {
         if (slow || runs <= 3 || Long.bitCount(runs) == 1) {
             recordRecent(currentConfig, module, stats.task(), elapsedNanos, workUnits, changedUnits, detail, runs);
         }
+        saveDirty.set(true);
         saveSoon(plugin, currentConfig);
     }
 
@@ -122,7 +135,9 @@ public final class ResourceReporter {
 
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             try {
-                save(plugin);
+                if (saveDirty.getAndSet(false)) {
+                    save(plugin);
+                }
             } finally {
                 saveRunning.set(false);
             }
@@ -137,9 +152,11 @@ public final class ResourceReporter {
         yaml.set("recent-event-limit", currentConfig.recentEvents());
         yaml.set("save-interval-millis", currentConfig.saveIntervalMillis());
         yaml.set("slow-sample-millis", currentConfig.slowSampleMillis());
-        yaml.set("notes", "## Resource reporter. Times are measured inside this plugin only; use spark for whole-server flame graphs.");
+        yaml.set("notes", "## Resource reporter. Inclusive time contains child scopes; exclusive/self time removes nested plugin samples. Fixed spike buckets show frequency, and recent samples name the Folia/async thread that performed the work.");
         writeModuleSummary(yaml.createSection("module-summary"));
         writeTasks(yaml.createSection("top-by-total-time"), Comparator.comparingLong(TaskSnapshot::totalNanos).reversed());
+        writeTasks(yaml.createSection("top-by-exclusive-time"),
+                Comparator.comparingLong(TaskSnapshot::exclusiveNanos).reversed());
         writeTasks(yaml.createSection("top-by-average-time"), Comparator.comparingDouble(TaskSnapshot::averageNanos).reversed());
         writeTasks(yaml.createSection("top-by-max-spike"), Comparator.comparingLong(TaskSnapshot::maxNanos).reversed());
         yaml.set("recent-slow-samples", snapshot(slowSamples));
@@ -153,6 +170,8 @@ public final class ResourceReporter {
         }
 
         try {
+            DebugFileRotator.rotateIfOversized(
+                    plugin, file, 4L * 1024L * 1024L, 2);
             yaml.save(file);
         } catch (IOException ex) {
             plugin.getLogger().log(Level.WARNING, "Could not save resource-report.debug.yml.", ex);
@@ -184,8 +203,16 @@ public final class ResourceReporter {
     private void writeStats(ConfigurationSection section, StatsSnapshot snapshot) {
         section.set("runs", snapshot.runs());
         section.set("total-ms", millis(snapshot.totalNanos()));
+        section.set("exclusive-total-ms", millis(snapshot.exclusiveNanos()));
         section.set("average-ms", snapshot.runs() == 0L ? 0.0D : roundMillis(snapshot.averageNanos()));
+        section.set("exclusive-average-ms", snapshot.runs() == 0L
+                ? 0.0D : roundMillis(snapshot.exclusiveAverageNanos()));
         section.set("max-ms", millis(snapshot.maxNanos()));
+        section.set("exclusive-max-ms", millis(snapshot.exclusiveMaxNanos()));
+        section.set("spikes-over-10ms", snapshot.spikesOver10Millis());
+        section.set("spikes-over-50ms", snapshot.spikesOver50Millis());
+        section.set("spikes-over-100ms", snapshot.spikesOver100Millis());
+        section.set("spikes-over-500ms", snapshot.spikesOver500Millis());
         section.set("work-units", snapshot.workUnits());
         section.set("changed-units", snapshot.changedUnits());
     }
@@ -209,6 +236,7 @@ public final class ResourceReporter {
                     + " [RESOURCE][" + module + "] " + task
                     + " -> ms=" + millis(elapsedNanos)
                     + " runs=" + runs
+                    + " thread=" + Thread.currentThread().getName()
                     + " work=" + workUnits
                     + " changed=" + changedUnits
                     + " " + safeDetail(detail));
@@ -235,6 +263,7 @@ public final class ResourceReporter {
             slowSamples.addLast(Instant.now()
                     + " [RESOURCE][" + module + "] " + task
                     + " -> ms=" + millis(elapsedNanos)
+                    + " thread=" + Thread.currentThread().getName()
                     + " work=" + workUnits
                     + " changed=" + changedUnits
                     + " " + safeDetail(detail));
@@ -263,13 +292,13 @@ public final class ResourceReporter {
     }
 
     public static final class ReportSample implements AutoCloseable {
-        private static final ReportSample DISABLED = new ReportSample(null, "", "", 0L);
         private final ResourceReporter reporter;
         private final String module;
         private final String task;
         private final long startedNanos;
         private long workUnits;
         private long changedUnits;
+        private long childNanos;
         private String detail = "";
         private boolean closed;
 
@@ -281,7 +310,10 @@ public final class ResourceReporter {
         }
 
         static ReportSample disabled() {
-            return DISABLED;
+            // ## Disabled samples may still receive counters from callers.
+            // Keep each no-op sample isolated so those mutable counters cannot
+            // leak between unrelated tasks while reporting is disabled.
+            return new ReportSample(null, "", "", 0L);
         }
 
         public ReportSample workUnits(long amount) {
@@ -305,17 +337,29 @@ public final class ResourceReporter {
                 return;
             }
             closed = true;
-            reporter.record(
-                    reporter.plugin,
-                    reporter.config,
-                    module,
-                    task,
-                    System.nanoTime() - startedNanos,
-                    workUnits,
-                    changedUnits,
-                    detail
-            );
+            reporter.closeSample(this);
         }
+    }
+
+    private void closeSample(ReportSample sample) {
+        long elapsed = Math.max(0L,
+                System.nanoTime() - sample.startedNanos);
+        Deque<ReportSample> stack = activeSamples.get();
+        if (!stack.isEmpty() && stack.peekLast() == sample) {
+            stack.removeLast();
+        } else {
+            stack.remove(sample);
+        }
+        ReportSample parent = stack.peekLast();
+        if (parent != null) {
+            parent.childNanos += elapsed;
+        } else if (stack.isEmpty()) {
+            activeSamples.remove();
+        }
+        long exclusive = Math.max(0L, elapsed - sample.childNanos);
+        record(plugin, config, sample.module, sample.task,
+                elapsed, exclusive, sample.workUnits,
+                sample.changedUnits, sample.detail);
     }
 
     private static final class TaskStats {
@@ -323,7 +367,10 @@ public final class ResourceReporter {
         private final String task;
         private final AtomicLong runs = new AtomicLong();
         private final AtomicLong totalNanos = new AtomicLong();
+        private final AtomicLong exclusiveNanos = new AtomicLong();
         private final AtomicLong maxNanos = new AtomicLong();
+        private final AtomicLong exclusiveMaxNanos = new AtomicLong();
+        private final SpikeCounters spikes = new SpikeCounters();
         private final AtomicLong workUnits = new AtomicLong();
         private final AtomicLong changedUnits = new AtomicLong();
 
@@ -336,12 +383,16 @@ public final class ResourceReporter {
             return task;
         }
 
-        private long record(long nanos, long work, long changed) {
+        private long record(long nanos, long exclusive,
+                long work, long changed) {
             long runCount = runs.incrementAndGet();
             totalNanos.addAndGet(Math.max(0L, nanos));
+            exclusiveNanos.addAndGet(Math.max(0L, exclusive));
             workUnits.addAndGet(Math.max(0L, work));
             changedUnits.addAndGet(Math.max(0L, changed));
             updateMax(maxNanos, nanos);
+            updateMax(exclusiveMaxNanos, exclusive);
+            spikes.record(nanos);
             return runCount;
         }
 
@@ -354,7 +405,13 @@ public final class ResourceReporter {
                     task,
                     runCount,
                     total,
+                    exclusiveNanos.get(),
                     maxNanos.get(),
+                    exclusiveMaxNanos.get(),
+                    spikes.over10Millis.get(),
+                    spikes.over50Millis.get(),
+                    spikes.over100Millis.get(),
+                    spikes.over500Millis.get(),
                     workUnits.get(),
                     changedUnits.get(),
                     runCount == 0L ? 0.0D : (double) total / (double) runCount
@@ -366,7 +423,10 @@ public final class ResourceReporter {
         private final String module;
         private final AtomicLong runs = new AtomicLong();
         private final AtomicLong totalNanos = new AtomicLong();
+        private final AtomicLong exclusiveNanos = new AtomicLong();
         private final AtomicLong maxNanos = new AtomicLong();
+        private final AtomicLong exclusiveMaxNanos = new AtomicLong();
+        private final SpikeCounters spikes = new SpikeCounters();
         private final AtomicLong workUnits = new AtomicLong();
         private final AtomicLong changedUnits = new AtomicLong();
 
@@ -374,12 +434,16 @@ public final class ResourceReporter {
             this.module = module;
         }
 
-        private void record(long nanos, long work, long changed) {
+        private void record(long nanos, long exclusive,
+                long work, long changed) {
             runs.incrementAndGet();
             totalNanos.addAndGet(Math.max(0L, nanos));
+            exclusiveNanos.addAndGet(Math.max(0L, exclusive));
             workUnits.addAndGet(Math.max(0L, work));
             changedUnits.addAndGet(Math.max(0L, changed));
             updateMax(maxNanos, nanos);
+            updateMax(exclusiveMaxNanos, exclusive);
+            spikes.record(nanos);
         }
 
         private StatsSnapshot snapshot() {
@@ -389,7 +453,13 @@ public final class ResourceReporter {
                     module,
                     runCount,
                     total,
+                    exclusiveNanos.get(),
                     maxNanos.get(),
+                    exclusiveMaxNanos.get(),
+                    spikes.over10Millis.get(),
+                    spikes.over50Millis.get(),
+                    spikes.over100Millis.get(),
+                    spikes.over500Millis.get(),
                     workUnits.get(),
                     changedUnits.get(),
                     runCount == 0L ? 0.0D : (double) total / (double) runCount
@@ -408,6 +478,29 @@ public final class ResourceReporter {
         } while (!max.compareAndSet(current, next));
     }
 
+    /** ## Fixed spike buckets reveal frequency; a single max cannot. */
+    private static final class SpikeCounters {
+        private final AtomicLong over10Millis = new AtomicLong();
+        private final AtomicLong over50Millis = new AtomicLong();
+        private final AtomicLong over100Millis = new AtomicLong();
+        private final AtomicLong over500Millis = new AtomicLong();
+
+        private void record(long nanos) {
+            if (nanos >= 10_000_000L) {
+                over10Millis.incrementAndGet();
+            }
+            if (nanos >= 50_000_000L) {
+                over50Millis.incrementAndGet();
+            }
+            if (nanos >= 100_000_000L) {
+                over100Millis.incrementAndGet();
+            }
+            if (nanos >= 500_000_000L) {
+                over500Millis.incrementAndGet();
+            }
+        }
+    }
+
     private interface StatsSnapshot {
         String path();
 
@@ -415,13 +508,31 @@ public final class ResourceReporter {
 
         long totalNanos();
 
+        long exclusiveNanos();
+
         long maxNanos();
+
+        long exclusiveMaxNanos();
+
+        long spikesOver10Millis();
+
+        long spikesOver50Millis();
+
+        long spikesOver100Millis();
+
+        long spikesOver500Millis();
 
         long workUnits();
 
         long changedUnits();
 
         double averageNanos();
+
+        default double exclusiveAverageNanos() {
+            return runs() == 0L
+                    ? 0.0D
+                    : (double) exclusiveNanos() / (double) runs();
+        }
     }
 
     private record TaskSnapshot(
@@ -430,7 +541,13 @@ public final class ResourceReporter {
             String task,
             long runs,
             long totalNanos,
+            long exclusiveNanos,
             long maxNanos,
+            long exclusiveMaxNanos,
+            long spikesOver10Millis,
+            long spikesOver50Millis,
+            long spikesOver100Millis,
+            long spikesOver500Millis,
             long workUnits,
             long changedUnits,
             double averageNanos
@@ -441,7 +558,13 @@ public final class ResourceReporter {
             String path,
             long runs,
             long totalNanos,
+            long exclusiveNanos,
             long maxNanos,
+            long exclusiveMaxNanos,
+            long spikesOver10Millis,
+            long spikesOver50Millis,
+            long spikesOver100Millis,
+            long spikesOver500Millis,
             long workUnits,
             long changedUnits,
             double averageNanos

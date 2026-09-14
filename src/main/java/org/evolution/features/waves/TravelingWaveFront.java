@@ -45,6 +45,9 @@ final class TravelingWaveFront {
     private double openWaterTargetHalfWidth;
     private double openWaterExpansionDistance;
     private double openWaterExpansionStartTravelled;
+    private boolean obstaclePassageActive;
+    private double obstaclePassageRemaining;
+    private double obstacleEnergyScale = 1.0D;
 
     TravelingWaveFront(long id, double x, double z, double headingX, double headingZ,
             double halfLength, double halfWidth, double baseEnergy, long tick) {
@@ -71,8 +74,8 @@ final class TravelingWaveFront {
         double magnitude = Math.hypot(headingX, headingZ);
         this.headingX = magnitude > 0.001D ? headingX / magnitude : 1.0D;
         this.headingZ = magnitude > 0.001D ? headingZ / magnitude : 0.0D;
-        this.halfLength = Math.max(4.0D, halfLength);
-        this.halfWidth = Math.max(8.0D, halfWidth);
+        this.halfLength = Math.max(3.5D, halfLength);
+        this.halfWidth = Math.max(3.0D, halfWidth);
         this.baseEnergy = clamp(baseEnergy);
         this.createdTick = tick;
         this.mergeResult = mergeResult;
@@ -154,6 +157,33 @@ final class TravelingWaveFront {
                 ? new Direction(channelCourseX, channelCourseZ)
                 : new Direction(headingX, headingZ);
     }
+
+    void beginObstaclePassage(int landCells, double passageDistance,
+            double directionX, double directionZ, double energyScale) {
+        double magnitude = Math.hypot(directionX, directionZ);
+        if (fizzling() || landCells < 1 || magnitude <= 0.001D) {
+            return;
+        }
+        // ## A small island or artificial barrier removes only the intersecting
+        // visual columns. The world-fixed front keeps its course to the far water.
+        headingX = directionX / magnitude;
+        headingZ = directionZ / magnitude;
+        shoreTargetLocked = false;
+        shoreGuided = false;
+        obstaclePassageActive = true;
+        obstaclePassageRemaining = Math.max(obstaclePassageRemaining,
+                Math.max(landCells + 2.0D, passageDistance + 2.0D));
+        obstacleEnergyScale *= clamp(energyScale);
+    }
+
+    boolean obstaclePassageActive() {
+        return obstaclePassageActive;
+    }
+
+    double obstacleEnergyScale() {
+        return obstacleEnergyScale;
+    }
+
     boolean beginPassageProbe(long tick) {
         long slot = Math.floorDiv(tick, 20L);
         if (slot == lastPassageProbeSlot) {
@@ -281,6 +311,12 @@ final class TravelingWaveFront {
     void commitMotion(Motion motion) {
         x = motion.nextX();
         z = motion.nextZ();
+        if (obstaclePassageActive) {
+            obstaclePassageRemaining -= motion.distance();
+            if (obstaclePassageRemaining <= 0.0D) {
+                obstaclePassageActive = false;
+            }
+        }
         travelled += motion.distance();
         updateOpenWaterExpansion();
     }
@@ -341,7 +377,7 @@ final class TravelingWaveFront {
     }
 
     private double currentEnergy(long tick) {
-        double energy = baseEnergy;
+        double energy = baseEnergy * obstacleEnergyScale;
         if (fadeInTicks > 0L) {
             double arrival = Math.max(0.0D, Math.min(1.0D,
                     (double) (tick - createdTick) / fadeInTicks));

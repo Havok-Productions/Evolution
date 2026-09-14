@@ -183,23 +183,39 @@ public final class PuddleFeature implements PluginFeature, Listener {
             traceHierarchy(PuddleActionPhase.RETIRE_INVALID,
                     PuddleActionSubrule.RAIN_REJECTED_RETIRED,
                     "retire-rain-rejected");
-            retireRainRejectedPuddles(world, puddles, currentConfig);
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "puddles", "phase.retire-invalid")) {
+                retireRainRejectedPuddles(world, puddles, currentConfig);
+                phase.workUnits(before).detail("rain-and-distance");
+            }
             traceHierarchy(PuddleActionPhase.RETIRE_INVALID,
                     PuddleActionSubrule.DISTANT_PUDDLES_RETIRED,
                     "retire-distant");
-            retireDistantPuddles(world, puddles, currentConfig);
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "puddles", "phase.retire-distant")) {
+                retireDistantPuddles(world, puddles, currentConfig);
+                phase.workUnits(puddles.size());
+            }
 
-            if (world.hasStorm()) {
-                dryStartedMillisByWorld.remove(worldId);
-                traceHierarchy(PuddleActionPhase.GROW,
-                        PuddleActionSubrule.RAIN_SEED_AND_EXPAND,
-                        "raining");
-                growNearPlayer(player, puddles, rainMultiplier(world), currentConfig);
-            } else if (readyToDry(worldId, currentConfig)) {
-                traceHierarchy(PuddleActionPhase.DRY,
-                        PuddleActionSubrule.DRY_GRACE_EXPIRED,
-                        "dry-weather");
-                dryNearPlayer(player, puddles, currentConfig);
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "puddles", world.hasStorm()
+                            ? "phase.grow" : "phase.dry")) {
+                if (world.hasStorm()) {
+                    dryStartedMillisByWorld.remove(worldId);
+                    traceHierarchy(PuddleActionPhase.GROW,
+                            PuddleActionSubrule.RAIN_SEED_AND_EXPAND,
+                            "raining");
+                    growNearPlayer(player, puddles, rainMultiplier(world),
+                            currentConfig);
+                } else if (readyToDry(worldId, currentConfig)) {
+                    traceHierarchy(PuddleActionPhase.DRY,
+                            PuddleActionSubrule.DRY_GRACE_EXPIRED,
+                            "dry-weather");
+                    dryNearPlayer(player, puddles, currentConfig);
+                }
+                phase.workUnits(currentConfig.seedAttemptsPerCycle()
+                                + currentConfig.maxExpansionsPerCycle())
+                        .changedUnits(Math.abs(puddles.size() - before));
             }
 
             if (puddles.isEmpty()) {
@@ -207,12 +223,22 @@ public final class PuddleFeature implements PluginFeature, Listener {
                 dryStartedMillisByWorld.remove(worldId);
             }
 
-            Set<Puddle> visible = visiblePuddles(player, puddles, currentConfig);
+            Set<Puddle> visible;
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "puddles", "phase.visibility")) {
+                visible = visiblePuddles(player, puddles, currentConfig);
+                phase.workUnits(puddles.size())
+                        .changedUnits(visible.size());
+            }
             traceHierarchy(PuddleActionPhase.RENDER,
                     PuddleActionSubrule.PLAYER_VISIBLE_SET,
                     "render-visible");
-            renderer.render(player, visible,
-                    currentConfig.renderReassertMillis());
+            try (ReportSample phase = plugin.resourceReporter().begin(
+                    "puddles", "phase.packet-render")) {
+                renderer.render(player, visible,
+                        currentConfig.renderReassertMillis());
+                phase.workUnits(visible.size());
+            }
             int delta = puddles.size() - before;
             sample.workUnits(currentConfig.seedAttemptsPerCycle() + currentConfig.maxExpansionsPerCycle())
                     .changedUnits(Math.abs(delta))

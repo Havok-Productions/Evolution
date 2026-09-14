@@ -24,6 +24,7 @@ final class TreeDnaRepository {
     private final EvolutionPlugin plugin;
     private final TreeDnaNormalizer normalizer;
     private final TreeEvolutionDiagnostics diagnostics;
+    private final TreeLeafOwnershipIndex leafOwnershipIndex;
     private final ConcurrentMap<String, TreeDna> records = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, TreeSeedlingRecord> seedlings =
             new ConcurrentHashMap<>();
@@ -36,11 +37,13 @@ final class TreeDnaRepository {
     TreeDnaRepository(
             EvolutionPlugin plugin,
             TreeDnaNormalizer normalizer,
-            TreeEvolutionDiagnostics diagnostics
+            TreeEvolutionDiagnostics diagnostics,
+            TreeLeafOwnershipIndex leafOwnershipIndex
     ) {
         this.plugin = plugin;
         this.normalizer = normalizer;
         this.diagnostics = diagnostics;
+        this.leafOwnershipIndex = leafOwnershipIndex;
     }
 
     ConcurrentMap<String, TreeDna> records() {
@@ -129,6 +132,7 @@ final class TreeDnaRepository {
         }
 
         diagnostics.recordDnaLoaded(loaded);
+        leafOwnershipIndex.rebuild(records.values());
         plugin.pathDebug().trace(
                 plugin,
                 "tree-evolution",
@@ -148,6 +152,24 @@ final class TreeDnaRepository {
                 "tree-evolution",
                 "persistence.dirty",
                 "version=" + version + " reason=" + reason + " entries=" + records.size());
+    }
+
+    void refreshOwnership(TreeDna dna) {
+        try (ReportSample sample = plugin.resourceReporter().begin(
+                "tree-evolution", "ownership-index.refresh")) {
+            leafOwnershipIndex.refresh(dna);
+            sample.workUnits(dna == null ? 0
+                            : dna.evolvedLeafCount()
+                                    + dna.originalShapeLeafCount())
+                    .detail("indexed-trees="
+                            + leafOwnershipIndex.indexedTreeCount()
+                            + " indexed-blocks="
+                            + leafOwnershipIndex.indexedBlockCount());
+        }
+    }
+
+    void removeOwnership(String treeKey) {
+        leafOwnershipIndex.remove(treeKey);
     }
 
     void save(TreeEvolutionConfig config) {
